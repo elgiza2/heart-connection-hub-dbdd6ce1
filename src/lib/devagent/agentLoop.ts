@@ -276,6 +276,21 @@ export async function advanceDevRun(
     }
 
     const result = await runTool(ws, reply);
+    if (
+      result.ok &&
+      project.github_repo &&
+      (reply.tool === "write_file" || reply.tool === "delete_file")
+    ) {
+      const savedCommit = await saveWorkspaceToGithub(
+        ws,
+        project.github_repo,
+        `${reply.tool} ${reply.path ?? "project"}`,
+      );
+      await db
+        .from("dev_projects")
+        .update({ last_commit: savedCommit, updated_at: new Date().toISOString() })
+        .eq("id", project.id);
+    }
     await event(
       db,
       run,

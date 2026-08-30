@@ -40,15 +40,19 @@ function repoSlug(projectId: string): string {
 
 export async function ensurePrivateGithubRepo(projectId: string, existing?: string | null): Promise<string> {
   if (existing) return existing;
-  const repo = await github<GithubRepo>("/user/repos", {
-    method: "POST",
-    body: JSON.stringify({
-      name: repoSlug(projectId),
-      description: "Private Megsy coding-agent project storage",
-      private: true,
-      auto_init: false,
-    }),
-  });
+  const account = await github<{ login?: string }>("/user");
+  if (!account?.login) throw new Error("GitHub did not return the central account name");
+  const name = repoSlug(projectId);
+  const found = await github<GithubRepo>(`/repos/${account.login}/${name}`, {}, true);
+  const repo = found ?? await github<GithubRepo>("/user/repos", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        description: "Private Megsy coding-agent project storage",
+        private: true,
+        auto_init: false,
+      }),
+    });
   if (!repo?.full_name) throw new Error("GitHub did not return the private repository name");
   return repo.full_name;
 }
