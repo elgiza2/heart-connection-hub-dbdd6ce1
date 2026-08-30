@@ -1758,6 +1758,8 @@ const ChatPage = () => {
           setMessages,
           setInput,
           setAttachedFiles,
+
+          setIsLoading,
           createOrUpdateConversation,
           saveMessage,
           ownInsertedIdsRef,
@@ -1783,6 +1785,8 @@ const ChatPage = () => {
             setMessages,
             setInput,
             setAttachedFiles,
+
+            setIsLoading,
             createOrUpdateConversation,
             saveMessage,
             ownInsertedIdsRef,
@@ -1824,6 +1828,8 @@ const ChatPage = () => {
             setMessages,
             setInput,
             setAttachedFiles,
+
+            setIsLoading,
             createOrUpdateConversation,
             saveMessage,
             ownInsertedIdsRef,
