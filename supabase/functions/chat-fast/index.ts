@@ -13,6 +13,12 @@
  */
 import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
 
+const fastCorsHeaders = {
+  ...corsHeaders,
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-anon-fingerprint",
+};
+
 const ROUTER_RULES = `You are the fast lane of the MEGSY assistant.
 
 ROUTING (highest priority):
@@ -51,11 +57,11 @@ function apiKey(): string | null {
 type Msg = { role: string; content: unknown };
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") return new Response("ok", { headers: fastCorsHeaders });
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...fastCorsHeaders, "Content-Type": "application/json" },
     });
   }
 
@@ -64,7 +70,7 @@ Deno.serve(async (req) => {
     // No fast-lane credentials: tell the client to use the full chat path.
     return new Response(JSON.stringify({ escalate: true, reason: "fast_lane_unconfigured" }), {
       status: 503,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...fastCorsHeaders, "Content-Type": "application/json" },
     });
   }
 
@@ -74,7 +80,7 @@ Deno.serve(async (req) => {
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
       status: 400,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...fastCorsHeaders, "Content-Type": "application/json" },
     });
   }
 
@@ -82,7 +88,7 @@ Deno.serve(async (req) => {
   if (messages.length === 0 || messages.length > 40) {
     return new Response(JSON.stringify({ escalate: true, reason: "unsupported_message_count" }), {
       status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...fastCorsHeaders, "Content-Type": "application/json" },
     });
   }
   // Text-only fast lane: anything richer goes to the full chat function.
@@ -90,7 +96,7 @@ Deno.serve(async (req) => {
     if (typeof m?.content !== "string") {
       return new Response(JSON.stringify({ escalate: true, reason: "non_text_content" }), {
         status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...fastCorsHeaders, "Content-Type": "application/json" },
       });
     }
   }
@@ -131,14 +137,14 @@ Deno.serve(async (req) => {
     console.error("chat-fast upstream failed:", lastErr);
     return new Response(JSON.stringify({ escalate: true, reason: "upstream_unavailable" }), {
       status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...fastCorsHeaders, "Content-Type": "application/json" },
     });
   }
 
   return new Response(upstream.body, {
     status: 200,
     headers: {
-      ...corsHeaders,
+      ...fastCorsHeaders,
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
