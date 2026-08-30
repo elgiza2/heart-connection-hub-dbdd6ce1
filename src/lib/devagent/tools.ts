@@ -132,9 +132,9 @@ export class DevWorkspace {
   /** Starts the Vite dev server on port 3000 (the VM's public preview port). */
   async startDevServer(): Promise<void> {
     await this.bash(
-      // Bracket trick: pkill -f 'vite' would match this very shell's cmdline
-      // and kill itself before vite ever starts.
-      "pkill -f '[v]ite' || true; (nohup npx vite --host 0.0.0.0 --port 3000 > /tmp/dev.log 2>&1 &) ; sleep 3; true",
+      // Kill by port, not by name: pkill -f 'vite' matches this very shell's
+      // own cmdline (it contains "npx vite …") and kills itself (exit 143).
+      "(fuser -k 3000/tcp 2>/dev/null || kill $(lsof -ti:3000) 2>/dev/null || true); (nohup npx vite --host 0.0.0.0 --port 3000 > /tmp/dev.log 2>&1 &) ; sleep 3; true",
       60_000,
     );
   }
