@@ -17,7 +17,11 @@ export async function askModel(
   messages: LlmMessage[],
   timeoutMs = 120_000,
 ): Promise<string> {
-  const url = `${process.env.SUPABASE_URL}/functions/v1/chat-alibaba`;
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY ||
+    process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "";
+  if (!supabaseUrl) return "";
+  const url = `${supabaseUrl}/functions/v1/chat-alibaba`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -25,7 +29,7 @@ export async function askModel(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        apikey: process.env.SUPABASE_PUBLISHABLE_KEY || "",
+        apikey: publishableKey,
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({

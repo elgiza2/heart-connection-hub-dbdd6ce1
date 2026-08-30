@@ -25,11 +25,16 @@ export interface DevAgentResult {
   body: Record<string, unknown>;
 }
 
-function db(): SupabaseClient {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error("Server misconfigured");
-  return createClient(url, key, { auth: { persistSession: false } });
+function db(token?: string): SupabaseClient {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_PUBLISHABLE_KEY ||
+    process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  if (!url || !key) throw new Error("Megsy Supabase is not configured");
+  return createClient(url, key, {
+    auth: { persistSession: false },
+    global: token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+  });
 }
 
 async function currentUser(supabase: SupabaseClient, token?: string) {
@@ -65,7 +70,7 @@ async function runState(supabase: SupabaseClient, run: Record<string, any>) {
     run.project_id
       ? supabase
           .from("dev_projects")
-          .select("id,title,preview_url,deploy_url,screenshot_url,repo_id,github_repo,last_commit,deployed_commit")
+          .select("id,name,preview_url,deploy_url,screenshot_url,repo_id,github_repo,head_commit,deployed_commit")
           .eq("id", run.project_id)
           .maybeSingle()
       : Promise.resolve({ data: null }),
@@ -74,7 +79,7 @@ async function runState(supabase: SupabaseClient, run: Record<string, any>) {
 }
 
 export async function handleDevAgent(payload: DevAgentPayload | null): Promise<DevAgentResult> {
-  const supabase = db();
+  const supabase = db(payload?.token);
   const user = await currentUser(supabase, payload?.token);
   if (!user) return { status: 401, body: { error: "Sign in required" } };
 
@@ -107,7 +112,7 @@ export async function handleDevAgent(payload: DevAgentPayload | null): Promise<D
             .insert({
               user_id: user.id,
               conversation_id: payload.conversation_id ?? null,
-              title: routed.title,
+              name: routed.title,
               template: routed.githubUrl ? "github" : "vite-react18-ts",
               status: "active",
             })

@@ -61,6 +61,16 @@ const STRONG_AR = [
   /(اشترك|سجلني|انشئ لي حساب)/,
 ];
 
+const DEV_EN = [
+  /\b(build|make|create|design|develop|code|program|clone|rebuild)\b[^.\n]{0,50}\b(web ?site|web ?app|landing page|store|shop|dashboard|app|application|game|bot|script|platform|saas)\b/i,
+  /\b(fix|debug|deploy|refactor|implement)\b[^.\n]{0,40}\b(app|project|site|website|code|repo|feature|bug)\b/i,
+];
+
+const DEV_AR = [
+  /(اصلح|صلح|ظبط|نفذ|كمل|ابني|انشئ)\s+.*(المشروع|التطبيق|الموقع|الكود|الميزه|الميزة)/i,
+  /(سو[يى]|سويلي|سو[يى]\s*لي|اعمل|اعملي|اعمل\s*لي|إعمل|ابن[يى]|ابنيلي|ابن[يى]\s*لي|انشئ|أنشئ|صمم|صممي|صمم\s*لي|طور|برمج|برمجلي|اكتب\s*لي|كلون)\s*(لي|لنا)?\s*[^.\n]{0,40}(موقع|ويب\s*سايت|تطبيق|ابليكيشن|أبليكيشن|منصه|منصة|متجر|ستور|لعبه|لعبة|بوت|سكربت|داشبورد|لوحه\s*تحكم|صفحه\s*هبوط|لاندنج|نظام|برنامج)/i,
+];
+
 /** Mail-sending asks handled by the Megsy Mail tool, not the computer agent. */
 const MAIL_INTENT =
   /(ابعت|ارسل|إبعت|أرسل|بعتلي|ابعتلي|رد على|ردي على)\s*(لي|لى)?\s*(ال)?(ايميل|إيميل|بريد|ميل|رساله|رسالة|mail)/i;
@@ -112,6 +122,16 @@ export function shouldUseComputer(text: string): boolean {
     STRONG_EN.filter((r) => r.test(t)).length +
     STRONG_AR.filter((r) => r.test(ar) || r.test(t)).length;
   return hits > 0;
+}
+
+/** Build/edit/deploy requests must use the VM-backed Dev Agent, not the generic artifact writer. */
+export function shouldUseDevAgent(text: string): boolean {
+  const raw = (text || "").trim();
+  if (!raw) return false;
+  if (/(^|\s)@dev\b/i.test(raw)) return true;
+  const normalized = normalizeArabic(raw);
+  return DEV_EN.some((pattern) => pattern.test(raw)) ||
+    DEV_AR.some((pattern) => pattern.test(normalized) || pattern.test(raw));
 }
 
 /** Strips the @computer mention so the provider never sees routing syntax. */

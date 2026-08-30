@@ -13,6 +13,7 @@ import { askJson, askModel } from "./llm";
 import {
   ensurePrivateGithubRepo,
   restoreWorkspaceFromGithub,
+  saveFileToGithub,
   saveWorkspaceToGithub,
 } from "./githubStorage";
 
@@ -74,7 +75,7 @@ interface ProjectRow {
   repo_id: string | null;
   preview_url: string | null;
   deploy_url: string | null;
-  title: string | null;
+  name: string | null;
   status: string | null;
   github_repo: string | null;
   deployed_commit: string | null;
@@ -299,17 +300,27 @@ export async function advanceDevRun(
     if (
       result.ok &&
       project.github_repo &&
-      (reply.tool === "write_file" || reply.tool === "delete_file")
+      reply.tool === "write_file" &&
+      reply.path
     ) {
-      const savedCommit = await saveWorkspaceToGithub(
-        ws,
-        project.github_repo,
-        `${reply.tool} ${reply.path ?? "project"}`,
-      );
-      await db
-        .from("dev_projects")
-        .update({ last_commit: savedCommit, updated_at: new Date().toISOString() })
-        .eq("id", project.id);
+      try {
+        const savedCommit = await saveFileToGithub(
+          ws,
+          project.github_repo,
+          reply.path,
+          `write_file ${reply.path}`,
+        );
+        await db
+          .from("dev_projects")
+          .update({ head_commit: savedCommit, updated_at: new Date().toISOString() })
+          .eq("id", project.id);
+        result.output += `; synced to GitHub (${savedCommit.slice(0, 7)})`;
+      } catch (error) {
+        result.ok = false;
+        result.output = `File was written in the workspace but GitHub sync failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      }
     }
     await event(
       db,
@@ -366,7 +377,7 @@ export async function advanceDevRun(
   if (commit) {
     await db
       .from("dev_projects")
-      .update({ last_commit: commit, updated_at: new Date().toISOString() })
+      .update({ head_commit: commit, updated_at: new Date().toISOString() })
       .eq("id", project.id);
   }
 

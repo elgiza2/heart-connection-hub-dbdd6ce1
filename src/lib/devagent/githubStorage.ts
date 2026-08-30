@@ -137,6 +137,51 @@ export async function saveWorkspaceToGithub(
   return commit.sha;
 }
 
+/** Persists one changed workspace file without re-uploading the entire project. */
+export async function saveFileToGithub(
+  ws: DevWorkspace,
+  repo: string,
+  path: string,
+  message: string,
+): Promise<string> {
+  const cleanPath = path.replace(/^\/+/, "");
+  if (!cleanPath || cleanPath.split("/").includes("..")) throw new Error("Invalid GitHub file path");
+  const content = await ws.readFile(cleanPath);
+  const blob = await github<{ sha?: string }>(`/repos/${repo}/git/blobs`, {
+    method: "POST",
+    body: JSON.stringify({ content, encoding: "utf-8" }),
+  });
+  if (!blob?.sha) throw new Error(`GitHub did not save ${cleanPath}`);
+
+  const parent = await branchHead(repo);
+  if (!parent) throw new Error("GitHub repository has no main branch");
+  const parentCommit = await github<GithubCommit>(`/repos/${repo}/git/commits/${parent}`);
+  const baseTree = parentCommit?.tree?.sha;
+  if (!baseTree) throw new Error("GitHub repository has no base tree");
+  const tree = await github<{ sha?: string }>(`/repos/${repo}/git/trees`, {
+    method: "POST",
+    body: JSON.stringify({
+      base_tree: baseTree,
+      tree: [{ path: cleanPath, mode: "100644", type: "blob", sha: blob.sha }],
+    }),
+  });
+  if (!tree?.sha) throw new Error(`GitHub did not create a tree for ${cleanPath}`);
+  const commit = await github<{ sha?: string }>(`/repos/${repo}/git/commits`, {
+    method: "POST",
+    body: JSON.stringify({
+      message: message.slice(0, 120) || `Update ${cleanPath}`,
+      tree: tree.sha,
+      parents: [parent],
+    }),
+  });
+  if (!commit?.sha) throw new Error(`GitHub did not commit ${cleanPath}`);
+  await github(`/repos/${repo}/git/refs/heads/main`, {
+    method: "PATCH",
+    body: JSON.stringify({ sha: commit.sha, force: false }),
+  });
+  return commit.sha;
+}
+
 export async function restoreWorkspaceFromGithub(ws: DevWorkspace, repo: string): Promise<boolean> {
   const head = await branchHead(repo);
   if (!head) return false;
