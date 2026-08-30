@@ -48,14 +48,20 @@ export class DevWorkspace {
     existingPreviewUrl?: string | null,
   ): Promise<{ ws: DevWorkspace; vmId: string; previewUrl: string | null; reused: boolean }> {
     if (existingVmId) {
+      // Reuse the existing VM whenever it still exists — creating a fresh VM
+      // per slice used to wipe the workspace and force a full re-scaffold.
       try {
-        await client.startVm(existingVmId);
-        return {
-          ws: new DevWorkspace(client, existingVmId),
-          vmId: existingVmId,
-          previewUrl: existingPreviewUrl ?? null,
-          reused: true,
-        };
+        const info = await client.getVm(existingVmId).catch(() => null);
+        const state = String(info?.state ?? "").toLowerCase();
+        if (info && state !== "deleted" && state !== "deleting") {
+          if (state !== "running") await client.startVm(existingVmId);
+          return {
+            ws: new DevWorkspace(client, existingVmId),
+            vmId: existingVmId,
+            previewUrl: existingPreviewUrl ?? null,
+            reused: true,
+          };
+        }
       } catch {
         /* VM was reaped — fall through and create a fresh one */
       }
