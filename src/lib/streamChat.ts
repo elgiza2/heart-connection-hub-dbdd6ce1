@@ -407,7 +407,14 @@ export async function streamChat({
         zone: (typeof window !== "undefined" && (window as any).__MEGSY_ZONE__) || "megsy",
       });
     let resp: Response | null = null;
+    // Headers watchdog: if the full chat function does not even answer with
+    // headers in time, stop waiting and let the fast lane rescue the turn.
+    const HEADERS_TIMEOUT_MS = deepResearch ? 120_000 : 15_000;
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      const headersCtl = new AbortController();
+      const onOuterAbort = () => headersCtl.abort();
+      signal?.addEventListener("abort", onOuterAbort, { once: true });
+      const headersTimer = setTimeout(() => headersCtl.abort(), HEADERS_TIMEOUT_MS);
       try {
         resp = await fetch(CHAT_URL, {
           method: "POST",
@@ -418,11 +425,12 @@ export async function streamChat({
             "x-anon-fingerprint": fingerprint,
           },
           body: requestBody,
-          signal,
+          signal: headersCtl.signal,
         });
         if (resp.status === 401 && attempt === 0) {
           authToken = await refreshAccessToken();
           continue;
+
         }
         if (resp.status >= 500 && attempt < 2) {
           await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
