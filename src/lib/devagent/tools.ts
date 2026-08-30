@@ -233,7 +233,7 @@ export class DevWorkspace {
       if (probe.stdout.includes("ready")) break;
       await new Promise((r) => setTimeout(r, 2000));
     }
-    const domain = await this.client.exposePort(this.vmId, 8080);
+    const domain = await this.client.exposePort(this.vmId, 8080, subdomain);
     return `https://${domain}`;
   }
 }
