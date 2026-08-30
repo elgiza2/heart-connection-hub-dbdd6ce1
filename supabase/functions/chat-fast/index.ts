@@ -70,7 +70,7 @@ Deno.serve(async (req) => {
     });
   }
 
-  let body: { messages?: Msg[]; customSystem?: string; model?: string };
+  let body: { messages?: Msg[]; customSystem?: string; model?: string; force?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -97,7 +97,7 @@ Deno.serve(async (req) => {
     }
   }
 
-  if (needsFullChat(messages)) {
+  if (!body.force && needsFullChat(messages)) {
     return new Response(JSON.stringify({ escalate: true, reason: "complex_intent" }), {
       status: 200,
       headers: { ...fastCorsHeaders, "Content-Type": "application/json" },
