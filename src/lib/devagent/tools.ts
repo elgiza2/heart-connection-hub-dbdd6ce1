@@ -129,8 +129,35 @@ export class DevWorkspace {
     );
   }
 
+  /**
+   * Makes sure the workspace can actually serve: vite + react plugin installed
+   * locally and a config that accepts the style.dev preview host (Vite blocks
+   * unknown Host headers with 403 otherwise).
+   */
+  async ensureDevServerDeps(): Promise<void> {
+    const cfg = await this.client.readFile(this.vmId, `${WORKDIR}/vite.config.ts`).catch(() => "");
+    if (!cfg.includes("allowedHosts")) {
+      await this.client.writeFile(
+        this.vmId,
+        // .js wins over .ts in Vite's config resolution, so this always applies.
+        `${WORKDIR}/vite.config.js`,
+        [
+          "import { defineConfig } from 'vite';",
+          "import react from '@vitejs/plugin-react';",
+          "export default defineConfig({ plugins: [react()], server: { host: true, allowedHosts: true }, preview: { host: true, allowedHosts: true } });",
+          "",
+        ].join("\n"),
+      ).catch(() => undefined);
+    }
+    await this.bash(
+      "test -x node_modules/.bin/vite || npm i -D vite @vitejs/plugin-react > /tmp/vite-install.log 2>&1 || true",
+      280_000,
+    );
+  }
+
   /** Starts the Vite dev server on port 3000 (the VM's public preview port). */
   async startDevServer(): Promise<void> {
+    await this.ensureDevServerDeps();
     await this.bash(
       // Kill by port, not by name: pkill -f 'vite' matches this very shell's
       // own cmdline (it contains "npx vite …") and kills itself (exit 143).
