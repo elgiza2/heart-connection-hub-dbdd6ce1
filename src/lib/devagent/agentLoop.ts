@@ -77,6 +77,7 @@ interface ProjectRow {
   title: string | null;
   status: string | null;
   github_repo: string | null;
+  deployed_commit: string | null;
 }
 
 async function event(
