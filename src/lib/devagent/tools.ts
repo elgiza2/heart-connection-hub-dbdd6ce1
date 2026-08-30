@@ -45,26 +45,31 @@ export class DevWorkspace {
   static async boot(
     client: FreestyleClient,
     existingVmId?: string | null,
+    existingPreviewUrl?: string | null,
   ): Promise<{ ws: DevWorkspace; vmId: string; previewUrl: string | null; reused: boolean }> {
     if (existingVmId) {
       try {
         await client.startVm(existingVmId);
-        const info = (await client.getVm(existingVmId)) as { domains?: string[] };
         return {
           ws: new DevWorkspace(client, existingVmId),
           vmId: existingVmId,
-          previewUrl: info.domains?.[0] ? `https://${info.domains[0]}` : null,
+          previewUrl: existingPreviewUrl ?? null,
           reused: true,
         };
       } catch {
         /* VM was reaped — fall through and create a fresh one */
       }
     }
-    const vm = await client.createVm({ workdir: WORKDIR, idleTimeoutSeconds: 1800 });
+    const vm = await client.createVm({ idleTimeoutSeconds: 1800 });
+    const ws = new DevWorkspace(client, vm.id);
+    await client.waitForRunning(vm.id);
+    await ws.bash(`mkdir -p ${WORKDIR}`, 30_000);
+    // v5 VMs have no implicit domain — route a style.dev name to port 3000.
+    const previewDomain = await client.exposePort(vm.id, 3000);
     return {
-      ws: new DevWorkspace(client, vm.id),
+      ws,
       vmId: vm.id,
-      previewUrl: vm.domains[0] ? `https://${vm.domains[0]}` : null,
+      previewUrl: `https://${previewDomain}`,
       reused: false,
     };
   }
@@ -85,17 +90,25 @@ export class DevWorkspace {
    * a genuine node_modules and a genuine build.
    */
   async scaffold(): Promise<ExecResult> {
-    const script = [
-      "npm create vite@latest . -- --template react-ts --yes",
-      "npm pkg set dependencies.react=^18.3.1 dependencies.react-dom=^18.3.1",
-      "npm install",
-      "npm install react-router-dom lucide-react clsx",
-      "npm install -D tailwindcss@^3.4.17 postcss autoprefixer",
-      "npx tailwindcss init -p",
-      `printf '%s\\n' "/** @type {import('tailwindcss').Config} */" "export default { content: ['./index.html','./src/**/*.{js,ts,jsx,tsx}'], theme: { extend: {} }, plugins: [] }" > tailwind.config.js`,
-      `printf '%s\\n' "@tailwind base;" "@tailwind components;" "@tailwind utilities;" > src/index.css`,
-    ].join(" && ");
-    return this.bash(script, 420_000);
+    // exec-await caps each call at ~290s, so scaffold runs in stages.
+    const stages: Array<{ cmd: string; timeout: number }> = [
+      { cmd: "npm create vite@latest . -- --template react-ts --yes && npm pkg set dependencies.react=^18.3.1 dependencies.react-dom=^18.3.1", timeout: 240_000 },
+      { cmd: "npm install && npm install react-router-dom lucide-react clsx", timeout: 280_000 },
+      { cmd: "npm install -D tailwindcss@^3.4.17 postcss autoprefixer && npx tailwindcss init -p", timeout: 280_000 },
+      {
+        cmd: [
+          `printf '%s\\n' "/** @type {import('tailwindcss').Config} */" "export default { content: ['./index.html','./src/**/*.{js,ts,jsx,tsx}'], theme: { extend: {} }, plugins: [] }" > tailwind.config.js`,
+          `printf '%s\\n' "@tailwind base;" "@tailwind components;" "@tailwind utilities;" > src/index.css`,
+        ].join(" && "),
+        timeout: 30_000,
+      },
+    ];
+    let last: ExecResult = { stdout: "", stderr: "", exitCode: 0 };
+    for (const stage of stages) {
+      last = await this.bash(stage.cmd, stage.timeout);
+      if (last.exitCode !== 0) return last;
+    }
+    return last;
   }
 
   /** Imports a public GitHub repository into the workdir. */
