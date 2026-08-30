@@ -243,6 +243,7 @@ export async function advanceDevRun(
   }
 
   // ---------------------------------------------------------------- coding
+  const noToolCall = new Map<string, number>();
   while (Date.now() - started < SLICE_MS) {
     const task = tasks.find((t) => t.status !== "done" && t.status !== "failed");
     if (!task) break;
