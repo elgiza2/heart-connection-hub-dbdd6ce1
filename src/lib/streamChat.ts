@@ -556,9 +556,15 @@ export async function streamChat({
     const IDLE_TIMEOUT_MS = deepResearch ? 240_000 : isVideoTurn ? 10 * 60_000 : 60_000;
     const idleAbort = new AbortController();
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    // Before the first visible token we are much less patient: a silent
+    // stream means the turn is stuck, and the fast lane can rescue it.
+    const FIRST_CONTENT_TIMEOUT_MS = deepResearch ? 240_000 : isVideoTurn ? 10 * 60_000 : 18_000;
     const resetIdle = () => {
       if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => idleAbort.abort(), IDLE_TIMEOUT_MS);
+      idleTimer = setTimeout(
+        () => idleAbort.abort(),
+        receivedAnyContent ? IDLE_TIMEOUT_MS : FIRST_CONTENT_TIMEOUT_MS,
+      );
     };
     resetIdle();
 
@@ -633,6 +639,10 @@ export async function streamChat({
       return;
     }
     if (e?.message === "IDLE_TIMEOUT") {
+      if (!receivedAnyContent && (await rescueWithFastChat())) {
+        await onDone();
+        return;
+      }
       onError?.(
         receivedAnyContent
           ? "Reply was cut off — the connection stalled. You can ask me to continue."
