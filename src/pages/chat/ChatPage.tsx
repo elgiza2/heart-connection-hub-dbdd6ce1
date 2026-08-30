@@ -1768,6 +1768,32 @@ const ChatPage = () => {
       return;
     }
 
+    // Build/edit requests always go through the real VM + private GitHub
+    // workspace. The generic Computer Agent's write_file tool only creates
+    // downloadable artifacts and cannot maintain a runnable project tree.
+    if (!selectedAgent) {
+      const { shouldUseDevAgent } = await import("@/lib/computer/shouldUseComputer");
+      if (shouldUseDevAgent(text)) {
+        try {
+          const { runDevTurn } = await import("./services/runDevTurn");
+          await runDevTurn({
+            text,
+            userMsg,
+            localTurnId,
+            setMessages,
+            setInput,
+            setAttachedFiles,
+            createOrUpdateConversation,
+            saveMessage,
+            ownInsertedIdsRef,
+          });
+        } finally {
+          isSubmittingRef.current = false;
+        }
+        return;
+      }
+    }
+
     // ── Computer Agent: explicit @computer / Agent pick, or model-routed "needs a real computer" requests ──
     {
       const agentRequested = selectedAgent?.id === "computer";

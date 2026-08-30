@@ -65,7 +65,7 @@ async function runState(supabase: SupabaseClient, run: Record<string, any>) {
     run.project_id
       ? supabase
           .from("dev_projects")
-          .select("id,title,preview_url,deploy_url,screenshot_url,repo_id,github_repo,last_commit,deployed_commit")
+          .select("id,name,preview_url,deploy_url,screenshot_url,repo_id,github_repo,head_commit,deployed_commit")
           .eq("id", run.project_id)
           .maybeSingle()
       : Promise.resolve({ data: null }),
@@ -107,7 +107,7 @@ export async function handleDevAgent(payload: DevAgentPayload | null): Promise<D
             .insert({
               user_id: user.id,
               conversation_id: payload.conversation_id ?? null,
-              title: routed.title,
+              name: routed.title,
               template: routed.githubUrl ? "github" : "vite-react18-ts",
               status: "active",
             })

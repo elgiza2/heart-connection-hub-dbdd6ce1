@@ -74,7 +74,7 @@ interface ProjectRow {
   repo_id: string | null;
   preview_url: string | null;
   deploy_url: string | null;
-  title: string | null;
+  name: string | null;
   status: string | null;
   github_repo: string | null;
   deployed_commit: string | null;
@@ -308,7 +308,7 @@ export async function advanceDevRun(
       );
       await db
         .from("dev_projects")
-        .update({ last_commit: savedCommit, updated_at: new Date().toISOString() })
+        .update({ head_commit: savedCommit, updated_at: new Date().toISOString() })
         .eq("id", project.id);
     }
     await event(
@@ -366,7 +366,7 @@ export async function advanceDevRun(
   if (commit) {
     await db
       .from("dev_projects")
-      .update({ last_commit: commit, updated_at: new Date().toISOString() })
+      .update({ head_commit: commit, updated_at: new Date().toISOString() })
       .eq("id", project.id);
   }
 
