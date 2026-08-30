@@ -149,9 +149,16 @@ export class DevWorkspace {
   }
 
   async writeFile(path: string, content: string): Promise<void> {
-    const dir = path.split("/").slice(0, -1).join("/");
+    const cleanPath = path.replace(/^\/+/, "");
+    if (!cleanPath || cleanPath.split("/").includes("..")) {
+      throw new Error("Invalid project file path");
+    }
+    const dir = cleanPath.split("/").slice(0, -1).join("/");
     if (dir) await this.bash(`mkdir -p ${JSON.stringify(dir)}`, 20_000);
-    await this.client.writeFile(this.vmId, `${WORKDIR}/${path.replace(/^\/+/, "")}`, content);
+    const absolutePath = `${WORKDIR}/${cleanPath}`;
+    await this.client.writeFile(this.vmId, absolutePath, content);
+    const saved = await this.client.readFile(this.vmId, absolutePath);
+    if (saved !== content) throw new Error(`File verification failed: ${cleanPath}`);
   }
 
   async readFile(path: string): Promise<string> {

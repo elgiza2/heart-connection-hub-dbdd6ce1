@@ -17,7 +17,7 @@ export interface DevEvent {
 
 export interface DevProject {
   id: string;
-  title: string | null;
+  name: string | null;
   preview_url: string | null;
   deploy_url: string | null;
   screenshot_url: string | null;
