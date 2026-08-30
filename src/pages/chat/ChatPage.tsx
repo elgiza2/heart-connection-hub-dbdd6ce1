@@ -1785,6 +1785,7 @@ const ChatPage = () => {
             setMessages,
             setInput,
             setAttachedFiles,
+            setIsLoading,
             createOrUpdateConversation,
             saveMessage,
             ownInsertedIdsRef,

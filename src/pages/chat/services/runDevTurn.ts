@@ -49,7 +49,11 @@ function renderTrace(state: DevState): string {
 /** Final answer body — only shown once the run finished. */
 function renderFinal(state: DevState): string {
   const lines: string[] = [];
+  const error = state.run?.error as string | undefined;
   const summary = state.run?.summary as string | undefined;
+  if (state.run?.status === "error" && error) {
+    return `تعذر إكمال مشروع البرمجة: ${error}`;
+  }
   if (summary) lines.push(summary);
   const deployed = state.events?.find((e) => e.type === "deployed");
   const url = (deployed?.payload?.url as string) || state.project?.deploy_url;
@@ -105,7 +109,9 @@ export async function runDevTurn({
       patch({ reasoning: trace });
     });
 
-    const content = (final ? renderFinal(final) : "") || renderFinalFallback(trace);
+    const content = final
+      ? renderFinal(final) || renderFinalFallback(trace)
+      : "تعذر الحصول على الحالة النهائية لوكيل البرمجة.";
     patch({ content, reasoning: trace });
     setIsLoading?.(false);
 
