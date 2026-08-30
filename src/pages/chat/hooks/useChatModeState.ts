@@ -26,7 +26,9 @@ export function useChatModeState() {
   const [slidesTemplate, setSlidesTemplate] = useState<string>(DEFAULT_SLIDES_TEMPLATE);
   const [slidesPickerOpen, setSlidesPickerOpen] = useState(false);
   const [mediaModel, setMediaModel] = useState<MediaModelChoice | null>(null);
-  const [computerUseEnabled, setComputerUseEnabled] = useState(true);
+  // Normal chat must start tool-free so simple turns can use `chat-fast`.
+  // Computer mode is enabled explicitly when the user selects an agent/task.
+  const [computerUseEnabled, setComputerUseEnabled] = useState(false);
 
   return {
     chatMode,
