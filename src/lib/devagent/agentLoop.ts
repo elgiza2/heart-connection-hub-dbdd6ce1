@@ -31,11 +31,37 @@ const ROUTER_SYSTEM = `You classify a user's request to a coding agent. Reply wi
 - "question": they only ask something, no code change needed.
 Set github_url when the user asks to import an existing GitHub repository.`;
 
+/**
+ * Shared design bar for planner + coder. Inspired by the motion-first
+ * landing/app aesthetic (motionsites.ai): dark cinematic surfaces, glass,
+ * gradient accents, real content, and framer-motion everywhere.
+ */
+const DESIGN_SYSTEM = `DESIGN BAR (non-negotiable):
+- The result must look like a real, shipped product — never a placeholder page,
+  never a single heading on an empty background.
+- Motion-first: use framer-motion (already installed) for entrance animations,
+  hover/tap states, staggered lists, scroll reveals and page transitions.
+- Visual language: dark cinematic base, glassmorphism panels
+  (backdrop-blur + white/5 borders), soft gradient accents, generous spacing,
+  rounded-2xl cards, lucide-react icons, real typographic hierarchy.
+- Never default Inter-on-white with purple gradients. Pick one distinctive
+  palette per project and define it as CSS variables in src/index.css.
+- Full app, not a hero: navigation/sidebar, several routed screens or sections,
+  interactive state (search, filters, playback, forms), empty/loading states,
+  responsive down to 375px.
+- Fill with realistic mock data (10-30 items with names, images via
+  https://picsum.photos/seed/<slug>/400/400, durations, prices, etc.).
+- Accessibility: semantic HTML, alt text, keyboard-focusable controls.`;
+
 const PLANNER_SYSTEM = `You are the planner of an autonomous full-stack coding agent working in a real Linux VM
 with a React 18 + Vite + TypeScript + Tailwind project.
-Break the user's request into 2-8 concrete engineering tasks. Reply with JSON only:
+Break the user's request into 4-8 concrete engineering tasks. Reply with JSON only:
 {"tasks":["...","..."]}
-Each task must be independently verifiable and touch real files. No task about deploying.`;
+Each task must be independently verifiable and touch real files. No task about deploying.
+Plan a COMPLETE product: design tokens/layout shell, then each major screen or feature,
+then polish (animations, responsive, empty states).
+
+${DESIGN_SYSTEM}`;
 
 const CODER_SYSTEM = `You are the coder of an autonomous agent working inside a real Linux VM on a
 React 18 + Vite + TypeScript + Tailwind project at /app. You output ONE tool call as JSON, nothing else:
@@ -52,10 +78,13 @@ Rules:
 - write_file always contains the COMPLETE final file, never a diff or placeholder.
 - Build real, production-quality React components — multiple files, typed props, Tailwind styling.
 - Never write index.html-only apps. Never use CDN React.
-- Install any package you import, with bash, before using it.
+- framer-motion, lucide-react, clsx and react-router-dom are preinstalled — use them.
+- Install any other package you import, with bash, before using it.
 - Do not repeat a failed action unchanged; change approach.
 - Finish the current task with "done" as soon as it is complete.
-- JSON only, no markdown fences.`;
+- JSON only, no markdown fences.
+
+${DESIGN_SYSTEM}`;
 
 interface RunRow {
   id: string;

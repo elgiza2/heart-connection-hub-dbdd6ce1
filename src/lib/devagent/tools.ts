@@ -102,7 +102,7 @@ export class DevWorkspace {
     // exec-await caps each call at ~290s, so scaffold runs in stages.
     const stages: Array<{ cmd: string; timeout: number }> = [
       { cmd: "printf '%s' '{\"name\":\"app\",\"private\":true,\"version\":\"0.0.0\"}' > package.json && npm create vite@latest . -- --template react-ts --yes && npm pkg set dependencies.react=^18.3.1 dependencies.react-dom=^18.3.1", timeout: 240_000 },
-      { cmd: "npm install && npm install react-router-dom lucide-react clsx", timeout: 280_000 },
+      { cmd: "npm install && npm install react-router-dom lucide-react clsx framer-motion", timeout: 280_000 },
       // postcss/tailwind configs must be .cjs — create-vite sets
       // "type": "module", so module.exports in a .js file crashes Vite.
       { cmd: "npm install -D tailwindcss@^3.4.17 postcss autoprefixer && npx tailwindcss init -p && for f in postcss.config tailwind.config; do [ -f $f.js ] && grep -q 'module.exports' $f.js && mv $f.js $f.cjs; done; true", timeout: 280_000 },
