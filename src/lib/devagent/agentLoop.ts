@@ -395,20 +395,14 @@ export async function advanceDevRun(
     } else {
       await event(db, run, "status", "جاري النشر");
       try {
-        const distFiles = await ws.collectDistFiles();
-        if (!Object.keys(distFiles).length) throw new Error("Build produced no dist files");
-        const dep = await client.deployFiles(distFiles, {
-          domains: [],
-          await: true,
-        });
-        deployUrl = dep.domains[0] ? `https://${dep.domains[0]}` : null;
+        deployUrl = await ws.publishDist();
         shot = deployUrl ? screenshotUrl(deployUrl) : null;
         await db.from("dev_deploys").insert({
           user_id: run.user_id,
           project_id: project.id,
           run_id: run.id,
           commit,
-          deployment_id: dep.deploymentId,
+          deployment_id: null,
           url: deployUrl,
           screenshot_url: shot,
           status: "success",
