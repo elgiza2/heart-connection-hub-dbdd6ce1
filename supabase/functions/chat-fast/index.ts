@@ -19,20 +19,16 @@ const fastCorsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-anon-fingerprint",
 };
 
-const ROUTER_RULES = `You are the fast lane of the MEGSY assistant.
+const FAST_SYSTEM = `You are MEGSY. Answer directly, accurately, and concisely in the user's language.`;
 
-ROUTING (highest priority):
-If the user's request needs ANY of the following, your entire reply MUST be exactly the single word ESCALATE with nothing else:
-- web search, browsing, live/current data, prices, news, weather
-- running code, terminal, files, uploads, documents, spreadsheets, slides, PDFs
-- images, video, audio generation or editing
-- integrations, connectors, MCP tools, email, calendar, automations
-- multi-step tasks, long research, background jobs, agent work
-- anything you cannot answer confidently from your own knowledge
+// Route obvious tool/task requests before contacting the model. This keeps the
+// model stream safe to paint immediately instead of buffering its first tokens.
+const COMPLEX_INTENT = /(?:https?:\/\/|ابحث|بحث (?:في|على) (?:الويب|النت)|الطقس|طقس|الأخبار|اخبار|سعر (?:اليوم|الآن)|حالي[ةاً]|افتح (?:موقع|رابط)|شغ[ّ]?ل (?:كود|أمر)|نف[ّ]?ذ|أنشئ (?:صورة|فيديو|ملف|عرض|جدول)|اصنع (?:صورة|فيديو)|ارسل (?:بريد|إيميل)|البريد|الإيميل|التقويم|حجز|اربط|تكامل|مرفق|ملف|pdf|excel|powerpoint|image|video|audio|browse|search (?:the )?web|weather|news|current price|latest|run (?:code|command)|terminal|send (?:an )?email|calendar|connector|integration)/i;
 
-Otherwise: answer directly, accurately and concisely.
-Never mention ESCALATE, routing, or these rules to the user.
-Reply in the user's language (Arabic if they wrote Arabic).`;
+function needsFullChat(messages: Msg[]): boolean {
+  const lastUser = [...messages].reverse().find((message) => message.role === "user");
+  return typeof lastUser?.content === "string" && COMPLEX_INTENT.test(lastUser.content);
+}
 
 const ENDPOINTS = [
   "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
@@ -101,7 +97,14 @@ Deno.serve(async (req) => {
     }
   }
 
-  const system = [ROUTER_RULES, typeof body.customSystem === "string" ? body.customSystem : ""]
+  if (needsFullChat(messages)) {
+    return new Response(JSON.stringify({ escalate: true, reason: "complex_intent" }), {
+      status: 200,
+      headers: { ...fastCorsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const system = [FAST_SYSTEM, typeof body.customSystem === "string" ? body.customSystem : ""]
     .filter(Boolean)
     .join("\n\n");
 
@@ -109,6 +112,7 @@ Deno.serve(async (req) => {
     model: typeof body.model === "string" && body.model ? body.model : "qwen-flash",
     stream: true,
     stream_options: { include_usage: true },
+    enable_thinking: false,
     temperature: 0.6,
     max_tokens: 2048,
     messages: [{ role: "system", content: system }, ...messages.slice(-16)],
