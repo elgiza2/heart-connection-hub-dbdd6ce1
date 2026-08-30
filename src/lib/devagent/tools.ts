@@ -69,7 +69,8 @@ export class DevWorkspace {
     const vm = await client.createVm({ idleTimeoutSeconds: 1800 });
     const ws = new DevWorkspace(client, vm.id);
     await client.waitForRunning(vm.id);
-    await ws.bash(`sudo mkdir -p ${WORKDIR} && sudo chown -R $(id -un):$(id -gn) ${WORKDIR}`, 30_000);
+    // NOTE: ws.bash cds into WORKDIR first, which fails before the dir exists.
+    await client.exec(vm.id, `sudo mkdir -p ${WORKDIR} && sudo chown -R $(id -un):$(id -gn) ${WORKDIR}`, 30_000);
     // v5 VMs have no implicit domain — route a style.dev name to port 3000.
     const previewDomain = await client.exposePort(vm.id, 3000);
     return {
