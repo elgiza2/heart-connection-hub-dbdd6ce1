@@ -17,6 +17,7 @@ export interface RunDevArgs {
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   setInput: (v: string) => void;
   setAttachedFiles: (v: any[]) => void;
+  setIsLoading?: (v: boolean) => void;
   createOrUpdateConversation: (title: string) => Promise<string | null>;
   saveMessage: (
     cid: string,
@@ -32,28 +33,28 @@ export function stripDevMention(text: string): string {
   return text.replace(/@dev\b/gi, "").trim();
 }
 
-function render(state: DevState): string {
+/** Live progress lines — rendered inside the thinking trace while running. */
+function renderTrace(state: DevState): string {
   const lines: string[] = [];
-  const tasks = state.tasks ?? [];
-  if (tasks.length) {
-    lines.push(
-      ...tasks.map((t) => {
-        const mark = t.status === "done" ? "✅" : t.status === "running" ? "⏳" : t.status === "failed" ? "❌" : "•";
-        return `${mark} ${t.title}`;
-      }),
-    );
+  for (const t of state.tasks ?? []) {
+    const mark = t.status === "done" ? "✅" : t.status === "running" ? "⏳" : t.status === "failed" ? "❌" : "•";
+    lines.push(`${mark} ${t.title}`);
   }
-  const lastTool = [...(state.events ?? [])].reverse().find((e) => e.type === "tool");
-  if (lastTool && !state.finished) lines.push("", `\`${lastTool.title}\``);
+  for (const e of (state.events ?? []).slice(-6)) {
+    if (e.type === "tool" && e.title) lines.push(e.title);
+  }
+  return lines.join("\n").trim();
+}
 
+/** Final answer body — only shown once the run finished. */
+function renderFinal(state: DevState): string {
+  const lines: string[] = [];
   const summary = state.run?.summary as string | undefined;
-  if (state.finished && summary) {
-    lines.push("", summary);
-  }
+  if (summary) lines.push(summary);
   const deployed = state.events?.find((e) => e.type === "deployed");
   const url = (deployed?.payload?.url as string) || state.project?.deploy_url;
   const shot = (deployed?.payload?.screenshot as string) || state.project?.screenshot_url;
-  if (state.finished && url) {
+  if (url) {
     lines.push("", `🔗 ${url}`);
     if (shot) lines.push("", `![preview](${shot})`);
   }
@@ -67,6 +68,7 @@ export async function runDevTurn({
   setMessages,
   setInput,
   setAttachedFiles,
+  setIsLoading,
   createOrUpdateConversation,
   saveMessage,
   ownInsertedIdsRef,
@@ -77,14 +79,15 @@ export async function runDevTurn({
   setMessages((prev) => [
     ...prev,
     userMsg,
-    { role: "assistant", content: "جاري تجهيز بيئة التطوير…", clientId: assistantClientId },
+    { role: "assistant", content: "", reasoning: "", clientId: assistantClientId },
   ]);
   setInput("");
   setAttachedFiles([]);
+  setIsLoading?.(true);
 
-  const update = (content: string) =>
+  const patch = (fields: Partial<Message>) =>
     setMessages((prev) =>
-      prev.map((m) => (m.clientId === assistantClientId ? { ...m, content } : m)),
+      prev.map((m) => (m.clientId === assistantClientId ? { ...m, ...fields } : m)),
     );
 
   try {
@@ -95,27 +98,36 @@ export async function runDevTurn({
     }
 
     const started = await startDevRun(prompt, cid);
-    let latest = "";
+    let trace = "";
     const final = await driveDevRun(started.run.id, (state) => {
-      const body = render(state);
-      latest = body || latest;
-      update(latest || "جاري العمل…");
+      const t = renderTrace(state);
+      if (t) trace = t;
+      patch({ reasoning: trace });
     });
 
-    const content = final ? render(final) || "تم." : latest || "تم.";
-    update(content);
+    const content = (final ? renderFinal(final) : "") || renderFinalFallback(trace);
+    patch({ content, reasoning: trace });
+    setIsLoading?.(false);
 
     if (cid) {
       const assistantId = await saveMessage(cid, "assistant", content, undefined, {
         kind: "devRun",
         devRunId: started.run.id,
+        reasoning: trace,
       });
       if (assistantId) ownInsertedIdsRef.current.add(assistantId);
     }
     window.dispatchEvent(new CustomEvent("megsy:conversations-changed"));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "فشل تشغيل وكيل البرمجة";
-    update(msg);
+    patch({ content: msg });
     toast.error(msg);
+  } finally {
+    setIsLoading?.(false);
   }
 }
+
+function renderFinalFallback(trace: string): string {
+  return trace ? "تم." : "تم.";
+}
+

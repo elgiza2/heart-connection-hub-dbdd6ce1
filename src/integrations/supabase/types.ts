@@ -3503,6 +3503,7 @@ export type Database = {
           intent: string
           last_heartbeat_at: string | null
           message_id: string | null
+          metadata: Json | null
           project_id: string | null
           prompt: string
           status: string
@@ -3522,6 +3523,7 @@ export type Database = {
           intent?: string
           last_heartbeat_at?: string | null
           message_id?: string | null
+          metadata?: Json | null
           project_id?: string | null
           prompt?: string
           status?: string
@@ -3541,6 +3543,7 @@ export type Database = {
           intent?: string
           last_heartbeat_at?: string | null
           message_id?: string | null
+          metadata?: Json | null
           project_id?: string | null
           prompt?: string
           status?: string
