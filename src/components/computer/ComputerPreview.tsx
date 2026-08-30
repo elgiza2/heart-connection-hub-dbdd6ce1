@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Monitor } from "lucide-react";
+import { Check, ChevronDown, Loader2, Monitor } from "lucide-react";
 import { useLongRun } from "@/hooks/useLongRun";
 import { clearActiveComputerRun, setActiveComputerRun } from "@/lib/computer/activeRun";
 import ThinkingTrace from "@/components/chat/ThinkingTrace";
+import { Button } from "@/components/ui/button";
 
 /**
  * Computer surface, reduced to two things only:
@@ -13,16 +14,19 @@ import ThinkingTrace from "@/components/chat/ThinkingTrace";
  */
 export function ComputerPreview({
   runId,
+  plan,
   onClose,
 }: {
   runId: string;
   plan?: string[];
   onClose?: () => void;
 }) {
-  const { run, events, question, answer } = useLongRun(runId);
+  const { run, events, question, answer, approvePlan } = useLongRun(runId);
   const [open, setOpen] = useState(true);
   const [summary, setSummary] = useState<string | null>(null);
   const [reply, setReply] = useState("");
+  const [approving, setApproving] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
   const summarizedRef = useRef(false);
 
   const active = run?.status === "running" || run?.status === "queued" || run?.status === "paused";
@@ -137,6 +141,20 @@ export function ComputerPreview({
   }, [events]);
 
   const hasScreen = !!url || !!lastShot;
+  const awaitingApproval = run?.awaiting_plan_ack === true;
+
+  const handleApprove = async () => {
+    if (approving) return;
+    setApproving(true);
+    setApprovalError(null);
+    try {
+      await approvePlan(plan);
+    } catch {
+      setApprovalError("مقدرتش أسجل الموافقة. جرّب تاني.");
+    } finally {
+      setApproving(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-2.5">
@@ -150,6 +168,31 @@ export function ComputerPreview({
           tool={activeTool}
           className="mb-0"
         />
+      )}
+
+      {awaitingApproval && !question && (
+        <div className="flex flex-col items-start gap-2" role="group" aria-label="الموافقة على خطة التنفيذ">
+          <Button
+            type="button"
+            variant="neutral"
+            size="sm"
+            onClick={() => void handleApprove()}
+            disabled={approving}
+            className="min-w-36"
+          >
+            {approving ? (
+              <Loader2 className="animate-spin" aria-hidden />
+            ) : (
+              <Check aria-hidden />
+            )}
+            {approving ? "ببدأ التنفيذ…" : "موافق، ابدأ التنفيذ"}
+          </Button>
+          {approvalError && (
+            <p className="text-xs text-destructive" role="alert">
+              {approvalError}
+            </p>
+          )}
+        </div>
       )}
 
       {/* the agent needs a human answer — plain text + one line of input */}
