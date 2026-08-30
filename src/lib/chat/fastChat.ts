@@ -46,6 +46,7 @@ export async function tryFastChat({
   onDelta,
   onModel,
   onUsage,
+  force,
 }: {
   messages: FastMsg[];
   authToken: string;
@@ -54,6 +55,8 @@ export async function tryFastChat({
   onDelta: (chunk: string) => void;
   onModel?: (model: string) => void;
   onUsage?: (usage: Record<string, number>) => void;
+  /** Answer even when the turn looks complex (used as a rescue path). */
+  force?: boolean;
 }): Promise<FastChatOutcome> {
   let resp: Response;
   try {
@@ -65,7 +68,7 @@ export async function tryFastChat({
         Authorization: `Bearer ${authToken}`,
         "x-anon-fingerprint": fingerprint,
       },
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify(force ? { messages, force: true } : { messages }),
       signal,
     });
   } catch (e) {

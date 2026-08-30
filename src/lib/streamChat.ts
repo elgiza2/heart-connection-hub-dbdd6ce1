@@ -252,6 +252,29 @@ export async function streamChat({
     origOnDelta(chunk);
   };
 
+  // Rescue: the full chat path can stall before it emits a single byte (heavy
+  // build/task prompts). Rather than leaving the user on an endless
+  // "Thinking…", we stream the answer from the fast Alibaba model instead.
+  const rescueWithFastChat = async (): Promise<boolean> => {
+    if (receivedAnyContent) return false;
+    try {
+      const outcome = await tryFastChat({
+        messages,
+        authToken: await getAccessToken(),
+        fingerprint: getAnonFingerprint(),
+        signal,
+        onDelta,
+        onModel,
+        onUsage,
+        force: true,
+      });
+      return outcome === "answered" && receivedAnyContent;
+    } catch {
+      return false;
+    }
+  };
+
+
   // ── Fast lane ───────────────────────────────────────────────────────────
   // Simple, tool-free turns go to the lightweight `chat-fast` function first
   // (no turn-context pre-flight). The fast model escalates by itself when the
@@ -384,7 +407,14 @@ export async function streamChat({
         zone: (typeof window !== "undefined" && (window as any).__MEGSY_ZONE__) || "megsy",
       });
     let resp: Response | null = null;
+    // Headers watchdog: if the full chat function does not even answer with
+    // headers in time, stop waiting and let the fast lane rescue the turn.
+    const HEADERS_TIMEOUT_MS = deepResearch ? 120_000 : 15_000;
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      const headersCtl = new AbortController();
+      const onOuterAbort = () => headersCtl.abort();
+      signal?.addEventListener("abort", onOuterAbort, { once: true });
+      const headersTimer = setTimeout(() => headersCtl.abort(), HEADERS_TIMEOUT_MS);
       try {
         resp = await fetch(CHAT_URL, {
           method: "POST",
@@ -395,11 +425,12 @@ export async function streamChat({
             "x-anon-fingerprint": fingerprint,
           },
           body: requestBody,
-          signal,
+          signal: headersCtl.signal,
         });
         if (resp.status === 401 && attempt === 0) {
           authToken = await refreshAccessToken();
           continue;
+
         }
         if (resp.status >= 500 && attempt < 2) {
           await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
@@ -408,11 +439,23 @@ export async function streamChat({
         break;
       } catch (error) {
         if (signal?.aborted) throw error;
+        if (headersCtl.signal.aborted) {
+          // Full path never answered — rescue with the fast model.
+          if (await rescueWithFastChat()) {
+            await onDone();
+            return;
+          }
+          throw new Error("IDLE_TIMEOUT");
+        }
         if (attempt === 2) throw error;
         await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+      } finally {
+        clearTimeout(headersTimer);
+        signal?.removeEventListener("abort", onOuterAbort);
       }
     }
     if (!resp) throw new Error("NETWORK_UNAVAILABLE");
+
 
     if (resp.status === 429) {
       onError?.("Rate limit exceeded. Please wait a moment and try again.");
@@ -513,9 +556,15 @@ export async function streamChat({
     const IDLE_TIMEOUT_MS = deepResearch ? 240_000 : isVideoTurn ? 10 * 60_000 : 60_000;
     const idleAbort = new AbortController();
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    // Before the first visible token we are much less patient: a silent
+    // stream means the turn is stuck, and the fast lane can rescue it.
+    const FIRST_CONTENT_TIMEOUT_MS = deepResearch ? 240_000 : isVideoTurn ? 10 * 60_000 : 18_000;
     const resetIdle = () => {
       if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => idleAbort.abort(), IDLE_TIMEOUT_MS);
+      idleTimer = setTimeout(
+        () => idleAbort.abort(),
+        receivedAnyContent ? IDLE_TIMEOUT_MS : FIRST_CONTENT_TIMEOUT_MS,
+      );
     };
     resetIdle();
 
@@ -590,6 +639,10 @@ export async function streamChat({
       return;
     }
     if (e?.message === "IDLE_TIMEOUT") {
+      if (!receivedAnyContent && (await rescueWithFastChat())) {
+        await onDone();
+        return;
+      }
       onError?.(
         receivedAnyContent
           ? "Reply was cut off — the connection stalled. You can ask me to continue."
