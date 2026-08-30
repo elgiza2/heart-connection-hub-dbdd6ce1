@@ -439,11 +439,23 @@ export async function streamChat({
         break;
       } catch (error) {
         if (signal?.aborted) throw error;
+        if (headersCtl.signal.aborted) {
+          // Full path never answered — rescue with the fast model.
+          if (await rescueWithFastChat()) {
+            await onDone();
+            return;
+          }
+          throw new Error("IDLE_TIMEOUT");
+        }
         if (attempt === 2) throw error;
         await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+      } finally {
+        clearTimeout(headersTimer);
+        signal?.removeEventListener("abort", onOuterAbort);
       }
     }
     if (!resp) throw new Error("NETWORK_UNAVAILABLE");
+
 
     if (resp.status === 429) {
       onError?.("Rate limit exceeded. Please wait a moment and try again.");
