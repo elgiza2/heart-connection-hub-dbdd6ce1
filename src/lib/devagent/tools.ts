@@ -213,25 +213,28 @@ export class DevWorkspace {
     await this.writeFile(".env", `VITE_SUPABASE_URL=${url}\nVITE_SUPABASE_ANON_KEY=${anonKey}\n`);
   }
 
-  /** Commits everything and pushes to the project's Freestyle Git repo. */
-  async commit(repoId: string, message: string): Promise<string | null> {
-    const { token } = await this.client.createRepoToken(repoId);
-    const remote = `https://x-access-token:${token}@git.freestyle.sh/${repoId}`;
-    const script = [
-      "git init -q 2>/dev/null || true",
-      "git config user.email agent@megsy.dev",
-      "git config user.name 'Dev Agent'",
-      `printf '%s\\n' node_modules dist .env > .gitignore`,
-      "git add -A",
-      `git commit -q -m ${JSON.stringify(message)} || true`,
-      "git branch -M main",
-      `git remote remove origin 2>/dev/null; git remote add origin ${JSON.stringify(remote)}`,
-      "git push -q -u origin main --force",
-      "git rev-parse HEAD",
-    ].join(" && ");
-    const res = await this.bash(script, 240_000);
-    const hash = res.stdout.trim().split("\n").pop() ?? "";
-    return /^[0-9a-f]{7,40}$/.test(hash) ? hash : null;
+  /**
+   * Serves the built `dist/` on port 8080 behind its own public style.dev
+   * name — this is the published site. Persistence of the source itself is
+   * handled by the private GitHub storage layer.
+   */
+  async publishDist(): Promise<string> {
+    const res = await this.bash("test -d dist && ls dist/index.html", 20_000);
+    if (res.exitCode !== 0) throw new Error("No dist/ output to publish — run a build first");
+    await this.bash(
+      "pkill -f 'http-server .*8080' || true; nohup npx --yes http-server dist -p 8080 -a 0.0.0.0 --silent > /tmp/publish.log 2>&1 & sleep 3; true",
+      120_000,
+    );
+    for (let i = 0; i < 8; i++) {
+      const probe = await this.bash(
+        "curl -sf -o /dev/null http://localhost:8080/ && echo ready || echo not_ready",
+        10_000,
+      );
+      if (probe.stdout.includes("ready")) break;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    const domain = await this.client.exposePort(this.vmId, 8080);
+    return `https://${domain}`;
   }
 }
 
