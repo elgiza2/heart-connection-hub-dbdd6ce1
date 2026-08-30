@@ -3441,6 +3441,7 @@ export type Database = {
           id: string
           metadata: Json
           name: string
+          preview_url: string | null
           repo_id: string | null
           screenshot_url: string | null
           status: string
@@ -3461,6 +3462,7 @@ export type Database = {
           id?: string
           metadata?: Json
           name?: string
+          preview_url?: string | null
           repo_id?: string | null
           screenshot_url?: string | null
           status?: string
@@ -3481,6 +3483,7 @@ export type Database = {
           id?: string
           metadata?: Json
           name?: string
+          preview_url?: string | null
           repo_id?: string | null
           screenshot_url?: string | null
           status?: string
