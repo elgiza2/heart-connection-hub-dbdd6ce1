@@ -98,7 +98,7 @@ export class DevWorkspace {
   async scaffold(): Promise<ExecResult> {
     // exec-await caps each call at ~290s, so scaffold runs in stages.
     const stages: Array<{ cmd: string; timeout: number }> = [
-      { cmd: "npm create vite@latest . -- --template react-ts --yes && npm pkg set dependencies.react=^18.3.1 dependencies.react-dom=^18.3.1", timeout: 240_000 },
+      { cmd: "printf '%s' '{\"name\":\"app\",\"private\":true,\"version\":\"0.0.0\"}' > package.json && npm create vite@latest . -- --template react-ts --yes && npm pkg set dependencies.react=^18.3.1 dependencies.react-dom=^18.3.1", timeout: 240_000 },
       { cmd: "npm install && npm install react-router-dom lucide-react clsx", timeout: 280_000 },
       { cmd: "npm install -D tailwindcss@^3.4.17 postcss autoprefixer && npx tailwindcss init -p", timeout: 280_000 },
       {
