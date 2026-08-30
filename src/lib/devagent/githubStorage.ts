@@ -2,6 +2,7 @@
 import type { DevWorkspace } from "./tools";
 
 const GATEWAY = "https://connector-gateway.lovable.dev/github";
+const DIRECT = "https://api.github.com";
 
 type GithubRepo = { full_name: string; default_branch?: string };
 type GithubRef = { object?: { sha?: string } };
@@ -9,22 +10,32 @@ type GithubCommit = { tree?: { sha?: string } };
 type GithubTree = { sha?: string; tree?: Array<{ path?: string; type?: string; sha?: string }> };
 type GithubBlob = { content?: string; encoding?: string };
 
-function credentials() {
+/**
+ * Prefers a direct GitHub PAT (GITHUB_TOKEN) so storage runs entirely on our own
+ * credentials. Falls back to the connector gateway only if no PAT is configured.
+ */
+function transport(): { base: string; headers: Record<string, string> } {
+  const pat = process.env.GITHUB_TOKEN;
+  if (pat) {
+    return { base: DIRECT, headers: { Authorization: `Bearer ${pat}` } };
+  }
   const lovableKey = process.env.LOVABLE_API_KEY;
   const githubKey = process.env.GITHUB_API_KEY;
   if (!lovableKey || !githubKey) throw new Error("Central GitHub storage is not configured");
-  return { lovableKey, githubKey };
+  return {
+    base: GATEWAY,
+    headers: { Authorization: `Bearer ${lovableKey}`, "X-Connection-Api-Key": githubKey },
+  };
 }
 
 async function github<T>(path: string, init: RequestInit = {}, allowNotFound = false): Promise<T | null> {
-  const { lovableKey, githubKey } = credentials();
-  const response = await fetch(`${GATEWAY}${path}`, {
+  const { base, headers } = transport();
+  const response = await fetch(`${base}${path}`, {
     ...init,
     headers: {
       Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${lovableKey}`,
-      "X-Connection-Api-Key": githubKey,
       "Content-Type": "application/json",
+      ...headers,
       ...(init.headers ?? {}),
     },
   });
@@ -33,6 +44,7 @@ async function github<T>(path: string, init: RequestInit = {}, allowNotFound = f
   if (!response.ok) throw new Error(`GitHub storage failed [${response.status}]: ${text.slice(0, 500)}`);
   return (text ? JSON.parse(text) : {}) as T;
 }
+
 
 function repoSlug(projectId: string): string {
   return `megsy-project-${projectId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 12)}`.toLowerCase();
