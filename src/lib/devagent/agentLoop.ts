@@ -156,7 +156,7 @@ export async function advanceDevRun(
   }
 
   // ---------------------------------------------------------------- VM boot
-  const boot = await DevWorkspace.boot(client, project.vm_id);
+  const boot = await DevWorkspace.boot(client, project.vm_id, project.preview_url);
   const ws = boot.ws;
   if (boot.vmId !== project.vm_id || !project.preview_url) {
     await db
