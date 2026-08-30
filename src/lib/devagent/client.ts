@@ -72,10 +72,12 @@ export async function driveDevRun(
     // A slice can take up to ~50s — poll `status` in parallel so the live
     // progress trace keeps updating instead of sitting on a dead spinner.
     const stepPromise = call<DevState>({ action: "step", run_id: runId });
+    let stepDone = false;
+    stepPromise.finally(() => { stepDone = true; }).catch(() => undefined);
     const poller = (async () => {
-      while (true) {
+      while (!stepDone) {
         await new Promise((r) => setTimeout(r, 4000));
-        if (await Promise.race([stepPromise.then(() => true), Promise.resolve(false)])) return;
+        if (stepDone) return;
         try {
           const s = (await call<DevState>({ action: "status", run_id: runId })) as DevState;
           last = s;
