@@ -191,8 +191,27 @@ export async function advanceDevRun(
       await patchRun(db, run, { status: "error", error: "Scaffold failed" });
       return true;
     }
+    await ws.bash("npm install", 300_000);
     await ws.startDevServer();
-    await event(db, run, "status", "المشروع جاهز والمعاينة شغالة", { preview: project.preview_url });
+    const ready = await ws.isDevServerReady();
+    await event(
+      db,
+      run,
+      ready ? "status" : "error",
+      ready ? "المشروع جاهز والمعاينة شغالة" : "خادم المعاينة لم يستجب",
+      { preview: project.preview_url },
+    );
+    if (!ready) {
+      await patchRun(db, run, { status: "error", error: "Dev server did not start" });
+      return true;
+    }
+  } else {
+    // VM reused — make sure dev server is alive and preview URL is current.
+    const ready = await ws.isDevServerReady(4);
+    if (!ready) {
+      await ws.startDevServer();
+      await ws.isDevServerReady();
+    }
   }
 
   // ---------------------------------------------------------------- tasks
