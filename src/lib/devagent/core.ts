@@ -65,7 +65,7 @@ async function runState(supabase: SupabaseClient, run: Record<string, any>) {
     run.project_id
       ? supabase
           .from("dev_projects")
-          .select("id,title,preview_url,deploy_url,screenshot_url,repo_id,last_commit")
+          .select("id,title,preview_url,deploy_url,screenshot_url,repo_id,github_repo,last_commit,deployed_commit")
           .eq("id", run.project_id)
           .maybeSingle()
       : Promise.resolve({ data: null }),

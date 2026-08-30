@@ -110,9 +110,42 @@ export class DevWorkspace {
   /** Starts the Vite dev server on port 3000 (the VM's public preview port). */
   async startDevServer(): Promise<void> {
     await this.bash(
-      "pkill -f 'vite' || true; nohup npx vite --host 0.0.0.0 --port 3000 > /tmp/dev.log 2>&1 & sleep 4; true",
+      "pkill -f 'vite' || true; nohup npx vite --host 0.0.0.0 --port 3000 > /tmp/dev.log 2>&1 & sleep 2; true",
       60_000,
     );
+  }
+
+  /** True when the dev server is responding on the public preview port. */
+  async isDevServerReady(retries = 8): Promise<boolean> {
+    for (let i = 0; i < retries; i++) {
+      const res = await this.bash(
+        "curl -sf -o /dev/null http://localhost:3000/ && echo ready || echo not_ready",
+        10_000,
+      );
+      if (res.stdout.includes("ready")) return true;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    return false;
+  }
+
+  /** Reads every file under dist/ into a deployable map. */
+  async collectDistFiles(): Promise<Record<string, { content: string; encoding?: string }>> {
+    const files: Record<string, { content: string; encoding?: string }> = {};
+    const queue: string[] = ["dist"];
+    while (queue.length) {
+      const dir = queue.shift()!;
+      const listing = await this.client.listDir(this.vmId, `${WORKDIR}/${dir}`);
+      for (const item of listing) {
+        const fullPath = `${dir}/${item.name}`;
+        if (item.kind === "directory") {
+          queue.push(fullPath);
+        } else {
+          const content = await this.readFile(fullPath);
+          files[fullPath.replace(/^dist\//, "")] = { content };
+        }
+      }
+    }
+    return files;
   }
 
   async writeFile(path: string, content: string): Promise<void> {

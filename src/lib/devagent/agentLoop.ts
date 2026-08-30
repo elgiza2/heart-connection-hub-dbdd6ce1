@@ -77,6 +77,7 @@ interface ProjectRow {
   title: string | null;
   status: string | null;
   github_repo: string | null;
+  deployed_commit: string | null;
 }
 
 async function event(
@@ -191,8 +192,27 @@ export async function advanceDevRun(
       await patchRun(db, run, { status: "error", error: "Scaffold failed" });
       return true;
     }
+    await ws.bash("npm install", 300_000);
     await ws.startDevServer();
-    await event(db, run, "status", "المشروع جاهز والمعاينة شغالة", { preview: project.preview_url });
+    const ready = await ws.isDevServerReady();
+    await event(
+      db,
+      run,
+      ready ? "status" : "error",
+      ready ? "المشروع جاهز والمعاينة شغالة" : "خادم المعاينة لم يستجب",
+      { preview: project.preview_url },
+    );
+    if (!ready) {
+      await patchRun(db, run, { status: "error", error: "Dev server did not start" });
+      return true;
+    }
+  } else {
+    // VM reused — make sure dev server is alive and preview URL is current.
+    const ready = await ws.isDevServerReady(4);
+    if (!ready) {
+      await ws.startDevServer();
+      await ws.isDevServerReady();
+    }
   }
 
   // ---------------------------------------------------------------- tasks
@@ -353,16 +373,22 @@ export async function advanceDevRun(
   // ---------------------------------------------------------------- deploy
   let deployUrl: string | null = null;
   let shot: string | null = null;
-  if (run.allow_deploy && buildOk && project.repo_id) {
-    if (project.deploy_url && commit && commit === (project as { last_deployed_commit?: string }).last_deployed_commit) {
+  if (run.allow_deploy && buildOk) {
+    if (!project.github_repo) {
+      await event(db, run, "error", "لا يمكن النشر بدون مستودع GitHub خاص", {
+        reason: "github_repo missing",
+      });
+    } else if (project.deploy_url && commit && commit === project.deployed_commit) {
       deployUrl = project.deploy_url;
+      await event(db, run, "status", "النسخة الحالية منشورة بالفعل", { url: deployUrl });
     } else {
       await event(db, run, "status", "جاري النشر");
       try {
-        const dep = await client.deployFromGit({
-          gitUrl: client.gitUrl(project.repo_id),
-          branch: "main",
-          build: { command: "npm install && npm run build", outDir: "dist" },
+        const distFiles = await ws.collectDistFiles();
+        if (!Object.keys(distFiles).length) throw new Error("Build produced no dist files");
+        const dep = await client.deployFiles(distFiles, {
+          domains: [],
+          await: true,
         });
         deployUrl = dep.domains[0] ? `https://${dep.domains[0]}` : null;
         shot = deployUrl ? screenshotUrl(deployUrl) : null;
@@ -381,7 +407,7 @@ export async function advanceDevRun(
           .update({
             deploy_url: deployUrl,
             screenshot_url: shot,
-            last_deployed_commit: commit,
+            deployed_commit: commit,
             updated_at: new Date().toISOString(),
           })
           .eq("id", project.id);
