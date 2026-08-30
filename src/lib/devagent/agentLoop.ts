@@ -289,10 +289,17 @@ export async function advanceDevRun(
     );
 
     if (!reply?.tool) {
+      // A single malformed JSON reply must not kill the whole task — retry a
+      // couple of times before giving up on it.
+      const misses = (noToolCall.get(task.id) ?? 0) + 1;
+      noToolCall.set(task.id, misses);
+      if (misses < 3) continue;
       await db.from("dev_tasks").update({ status: "failed", result: "no tool call" }).eq("id", task.id);
       task.status = "failed";
       continue;
     }
+    noToolCall.delete(task.id);
+
 
     if (reply.tool === "done") {
       await db
