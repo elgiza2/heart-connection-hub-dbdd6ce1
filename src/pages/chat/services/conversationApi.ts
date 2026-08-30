@@ -161,7 +161,12 @@ export async function createOrUpdateConversation(
   if (data) {
     opts.setConversationId(data.id);
     opts.setConversationTitle(title);
-    void generateShortTitle(firstMessage, data.id, opts.setConversationTitle);
+    // Keep title generation off the first-token critical path. Starting a
+    // second model stream here competes with chat-fast for the browser and the
+    // workspace gateway exactly while the user is waiting for the reply.
+    window.setTimeout(() => {
+      void generateShortTitle(firstMessage, data.id, opts.setConversationTitle);
+    }, 2500);
     return data.id;
   }
   return null;
