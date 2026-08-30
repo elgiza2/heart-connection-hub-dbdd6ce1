@@ -29,12 +29,6 @@ export interface RunComputerArgs {
   ownInsertedIdsRef: React.MutableRefObject<Set<string>>;
 }
 
-function planAsChatText(intro: string, plan: string[]): string {
-  if (!plan.length) return intro;
-  const numberedPlan = plan.map((step, index) => `${index + 1}. ${step}`).join("\n");
-  return [intro.trim(), "خطة التنفيذ:", numberedPlan].filter(Boolean).join("\n\n");
-}
-
 export async function runComputerTurn({
   text,
   userMsg,
@@ -103,12 +97,9 @@ export async function runComputerTurn({
       const { generateRunPlan } = await import("@/lib/computer/narration");
       plan = await generateRunPlan(prompt || text, cid);
       if (plan.length) {
-        const chatText = planAsChatText(intro, plan);
         setMessages((prev) =>
           prev.map((m) =>
-            m.clientId === assistantClientId
-              ? { ...m, content: chatText, computerPlan: plan }
-              : m,
+            m.clientId === assistantClientId ? { ...m, computerPlan: plan } : m,
           ),
         );
       }
@@ -123,9 +114,8 @@ export async function runComputerTurn({
       if (!run?.id) throw new Error("تعذّر بدء المهمة على الكمبيوتر. حاول تاني.");
       setActiveComputerRun(run.id);
       let assistantId: string | undefined;
-      const chatText = planAsChatText(intro, plan);
       if (cid) {
-        assistantId = await saveMessage(cid, "assistant", chatText, undefined, {
+        assistantId = await saveMessage(cid, "assistant", intro, undefined, {
           kind: "longRun",
           longRunId: run.id,
           computerPlan: plan,
@@ -138,7 +128,7 @@ export async function runComputerTurn({
             ? {
                 ...m,
                 id: assistantId || m.id,
-                content: chatText,
+                content: intro,
                 longRunId: run.id,
                 computerPlan: plan,
                  toolParts: [{ ...computerTool, state: "done" }],
