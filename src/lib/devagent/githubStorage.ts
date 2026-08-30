@@ -50,7 +50,7 @@ export async function ensurePrivateGithubRepo(projectId: string, existing?: stri
         name,
         description: "Private Megsy coding-agent project storage",
         private: true,
-        auto_init: false,
+      auto_init: true,
       }),
     });
   if (!repo?.full_name) throw new Error("GitHub did not return the private repository name");
@@ -70,7 +70,7 @@ export async function saveWorkspaceToGithub(
   const files = await ws.projectFiles();
   if (!files.length) throw new Error("The project has no files to save");
 
-  const entries: Array<{ path: string; mode: "100644"; type: "blob"; sha: string }> = [];
+  const entries: Array<{ path: string; mode: "100644"; type: "blob"; sha: string | null }> = [];
   for (const file of files) {
     const blob = await github<{ sha?: string }>(`/repos/${repo}/git/blobs`, {
       method: "POST",
@@ -85,6 +85,15 @@ export async function saveWorkspaceToGithub(
   if (parent) {
     const commit = await github<GithubCommit>(`/repos/${repo}/git/commits/${parent}`);
     baseTree = commit?.tree?.sha;
+    if (baseTree) {
+      const previous = await github<GithubTree>(`/repos/${repo}/git/trees/${baseTree}?recursive=1`);
+      const currentPaths = new Set(files.map((file) => file.path));
+      for (const old of previous?.tree ?? []) {
+        if (old.type === "blob" && old.path && !currentPaths.has(old.path)) {
+          entries.push({ path: old.path, mode: "100644", type: "blob", sha: null });
+        }
+      }
+    }
   }
   const tree = await github<{ sha?: string }>(`/repos/${repo}/git/trees`, {
     method: "POST",
