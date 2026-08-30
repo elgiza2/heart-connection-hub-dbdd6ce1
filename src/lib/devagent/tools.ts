@@ -155,6 +155,11 @@ export class DevWorkspace {
       "test -x node_modules/.bin/vite || npm i -D vite @vitejs/plugin-react > /tmp/vite-install.log 2>&1 || true",
       280_000,
     );
+    // Motion + icons are part of the house design system — always available.
+    await this.bash(
+      "test -d node_modules/framer-motion || npm i framer-motion lucide-react clsx > /tmp/motion-install.log 2>&1 || true",
+      280_000,
+    );
     // CJS configs break under "type": "module" — normalize to .cjs.
     await this.bash(
       "for f in postcss.config tailwind.config; do [ -f $f.js ] && grep -q 'module.exports' $f.js && mv $f.js $f.cjs; done; true",
