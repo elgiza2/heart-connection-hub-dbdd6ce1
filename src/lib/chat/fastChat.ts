@@ -27,8 +27,9 @@ export function isFastLaneEligible(opts: {
   const { messages } = opts;
   if (opts.deepResearch || opts.searchEnabled || opts.computerUseEnabled) return false;
   if (opts.activeAgent || opts.activeSkill) return false;
-  const mode = String(opts.chatMode || "chat").toLowerCase();
-  if (mode !== "chat") return false;
+  // The chat page sends `normal` for a plain turn; `chat` is the legacy name.
+  const mode = String(opts.chatMode || "normal").toLowerCase();
+  if (mode !== "chat" && mode !== "normal") return false;
   if (!messages.length || messages.length > 30) return false;
   let total = 0;
   for (const m of messages) {
