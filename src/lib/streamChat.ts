@@ -252,6 +252,29 @@ export async function streamChat({
     origOnDelta(chunk);
   };
 
+  // Rescue: the full chat path can stall before it emits a single byte (heavy
+  // build/task prompts). Rather than leaving the user on an endless
+  // "Thinking…", we stream the answer from the fast Alibaba model instead.
+  const rescueWithFastChat = async (): Promise<boolean> => {
+    if (receivedAnyContent) return false;
+    try {
+      const outcome = await tryFastChat({
+        messages,
+        authToken: await getAccessToken(),
+        fingerprint: getAnonFingerprint(),
+        signal,
+        onDelta,
+        onModel,
+        onUsage,
+        force: true,
+      });
+      return outcome === "answered" && receivedAnyContent;
+    } catch {
+      return false;
+    }
+  };
+
+
   // ── Fast lane ───────────────────────────────────────────────────────────
   // Simple, tool-free turns go to the lightweight `chat-fast` function first
   // (no turn-context pre-flight). The fast model escalates by itself when the
