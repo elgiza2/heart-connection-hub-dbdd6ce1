@@ -17,7 +17,9 @@ import {
   saveWorkspaceToGithub,
 } from "./githubStorage";
 
-const SLICE_MS = 50_000;
+// The coder model needs 50-130s per reply, so a slice must be able to hold
+// at least one full call (the API route allows 300s).
+const SLICE_MS = 240_000;
 const MAX_TOOLS_PER_SLICE = 6;
 const MAX_BUILD_FIXES = 3;
 
@@ -311,7 +313,7 @@ export async function advanceDevRun(
 
     // The coder call itself can take up to ~40s — end the slice early
     // instead of blowing far past SLICE_MS and leaving the client silent.
-    if (Date.now() - started > SLICE_MS - 45_000) break;
+    if (Date.now() - started > SLICE_MS - 150_000) break;
 
     const reply = await askJson<
       ToolCall & { thought?: string; summary?: string; tools?: (ToolCall & { summary?: string })[] }
@@ -406,7 +408,7 @@ export async function advanceDevRun(
       run.step = (run.step ?? 0) + 1;
     }
 
-    if ((run.step ?? 0) > MAX_TOOLS_PER_SLICE * 20) break; // hard safety stop
+    if ((run.step ?? 0) > MAX_TOOLS_PER_SLICE * 40) break; // hard safety stop
   }
 
 
