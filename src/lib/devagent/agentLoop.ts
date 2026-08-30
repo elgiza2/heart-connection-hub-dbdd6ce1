@@ -378,7 +378,7 @@ export async function advanceDevRun(
       await event(db, run, "error", "لا يمكن النشر بدون مستودع GitHub خاص", {
         reason: "github_repo missing",
       });
-    } else if (project.deploy_url && commit && commit === (project as { last_deployed_commit?: string }).last_deployed_commit) {
+    } else if (project.deploy_url && commit && commit === project.deployed_commit) {
       deployUrl = project.deploy_url;
       await event(db, run, "status", "النسخة الحالية منشورة بالفعل", { url: deployUrl });
     } else {
