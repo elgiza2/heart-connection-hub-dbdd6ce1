@@ -19,6 +19,7 @@ const loadSendPath = () => {
   warmPromise = Promise.all([
     import("../services/runChatStreamTurn"),
     import("@/lib/computer/classifyIntent"),
+    import("@/lib/chat/fastChat"),
     import("@/lib/achievements"),
     import("@/lib/streaks"),
     import("@/lib/chat/turnContext").then((m) => {

@@ -1,5 +1,6 @@
 import { startJob, subscribeJob, resumeJob } from "@/lib/jobs/client";
 import { getAnonFingerprint } from "@/lib/anonFingerprint";
+import { isFastLaneEligible, tryFastChat } from "@/lib/chat/fastChat";
 
 export const GUEST_QUOTA_ERROR = "GUEST_QUOTA_EXCEEDED";
 
@@ -256,9 +257,8 @@ export async function streamChat({
   // (no turn-context pre-flight). The fast model escalates by itself when the
   // turn actually needs tools/tasks, and we then fall through to the full path.
   try {
-    const fast = await import("@/lib/chat/fastChat");
     if (
-      fast.isFastLaneEligible({
+      isFastLaneEligible({
         messages,
         chatMode,
         deepResearch,
@@ -268,7 +268,7 @@ export async function streamChat({
         activeSkill,
       })
     ) {
-      const outcome = await fast.tryFastChat({
+      const outcome = await tryFastChat({
         messages,
         authToken: await getAccessToken(),
         fingerprint: getAnonFingerprint(),

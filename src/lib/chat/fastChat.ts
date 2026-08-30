@@ -11,9 +11,6 @@
 type FastMsg = { role: "user" | "assistant"; content: unknown };
 
 const FAST_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-fast`;
-const ESCALATE_MARKER = "ESCALATE";
-/** Longest prefix we buffer before deciding the reply is a real answer. */
-const PROBE_CHARS = ESCALATE_MARKER.length + 2;
 
 export function isFastLaneEligible(opts: {
   messages: FastMsg[];
@@ -92,38 +89,16 @@ export async function tryFastChat({
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let textBuffer = "";
-  let probe = "";
   let emitted = false;
   let sawAnyPayload = false;
-  let decided = false;
-
-  const flushProbe = () => {
-    if (!probe) return;
-    if (!emitted && modelUsed) onModel?.(modelUsed);
-    emitted = true;
-    onDelta(probe);
-    probe = "";
-  };
 
   const handleContent = (content: string) => {
     sawAnyPayload = true;
-    if (decided) {
-      if (!emitted && modelUsed) onModel?.(modelUsed);
-      emitted = true;
-      onDelta(content);
-      return;
-    }
-    probe += content;
-    const trimmed = probe.trimStart();
-    if (trimmed.toUpperCase().startsWith(ESCALATE_MARKER)) {
-      decided = true;
-      probe = "";
-      throw new Error("__ESCALATE__");
-    }
-    if (trimmed.length >= PROBE_CHARS) {
-      decided = true;
-      flushProbe();
-    }
+    if (!emitted && modelUsed) onModel?.(modelUsed);
+    emitted = true;
+    // The edge function performs routing before opening an SSE response, so
+    // every model token is now safe to render without an ESCALATE probe delay.
+    onDelta(content);
   };
 
   const handleLine = (line: string) => {
@@ -176,7 +151,6 @@ export async function tryFastChat({
     throw e;
   }
 
-  flushProbe();
   if (!sawAnyPayload && !emitted) return "escalate";
   return "answered";
 }
