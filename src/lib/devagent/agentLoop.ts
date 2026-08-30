@@ -372,16 +372,22 @@ export async function advanceDevRun(
   // ---------------------------------------------------------------- deploy
   let deployUrl: string | null = null;
   let shot: string | null = null;
-  if (run.allow_deploy && buildOk && project.repo_id) {
-    if (project.deploy_url && commit && commit === (project as { last_deployed_commit?: string }).last_deployed_commit) {
+  if (run.allow_deploy && buildOk) {
+    if (!project.github_repo) {
+      await event(db, run, "error", "لا يمكن النشر بدون مستودع GitHub خاص", {
+        reason: "github_repo missing",
+      });
+    } else if (project.deploy_url && commit && commit === (project as { last_deployed_commit?: string }).last_deployed_commit) {
       deployUrl = project.deploy_url;
+      await event(db, run, "status", "النسخة الحالية منشورة بالفعل", { url: deployUrl });
     } else {
       await event(db, run, "status", "جاري النشر");
       try {
-        const dep = await client.deployFromGit({
-          gitUrl: client.gitUrl(project.repo_id),
-          branch: "main",
-          build: { command: "npm install && npm run build", outDir: "dist" },
+        const distFiles = await ws.collectDistFiles();
+        if (!Object.keys(distFiles).length) throw new Error("Build produced no dist files");
+        const dep = await client.deployFiles(distFiles, {
+          domains: [],
+          await: true,
         });
         deployUrl = dep.domains[0] ? `https://${dep.domains[0]}` : null;
         shot = deployUrl ? screenshotUrl(deployUrl) : null;
