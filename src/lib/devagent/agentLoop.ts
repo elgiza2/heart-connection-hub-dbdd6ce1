@@ -277,6 +277,8 @@ export async function advanceDevRun(
 
   // ---------------------------------------------------------------- coding
   const noToolCall = new Map<string, number>();
+  /** Files already read this slice — re-reads are the classic stall loop. */
+  const readOnce = new Set<string>();
   while (Date.now() - started < SLICE_MS) {
     const task = tasks.find((t) => t.status !== "done" && t.status !== "failed");
     if (!task) break;
@@ -305,7 +307,9 @@ export async function advanceDevRun(
     // instead of blowing far past SLICE_MS and leaving the client silent.
     if (Date.now() - started > SLICE_MS - 45_000) break;
 
-    const reply = await askJson<ToolCall & { thought?: string; summary?: string }>(
+    const reply = await askJson<
+      ToolCall & { thought?: string; summary?: string; tools?: (ToolCall & { summary?: string })[] }
+    >(
       token,
       CODER_SYSTEM,
       [
@@ -316,13 +320,20 @@ export async function advanceDevRun(
             `CURRENT TASK: ${task.title}`,
             `PROJECT FILES:\n${await ws.tree()}`,
             log.length ? `RECENT ACTIONS:\n${log.join("\n")}` : "RECENT ACTIONS: (none yet)",
-            "Reply with the next tool call as JSON only.",
+            "Reply with the next tool call(s) as JSON only. Batch 2-4 write_file calls when you can.",
           ].join("\n\n"),
         },
       ],
     );
 
-    if (!reply?.tool) {
+    const batch = (Array.isArray(reply?.tools) && reply!.tools!.length
+      ? reply!.tools!
+      : reply?.tool
+        ? [reply as ToolCall & { summary?: string }]
+        : []
+    ).slice(0, 6);
+
+    if (batch.length === 0) {
       // A single malformed JSON reply must not kill the whole task — retry a
       // couple of times before giving up on it.
       const misses = (noToolCall.get(task.id) ?? 0) + 1;
@@ -334,55 +345,64 @@ export async function advanceDevRun(
     }
     noToolCall.delete(task.id);
 
-
-    if (reply.tool === "done") {
-      await db
-        .from("dev_tasks")
-        .update({ status: "done", result: (reply.summary ?? "").slice(0, 1000) })
-        .eq("id", task.id);
-      task.status = "done";
-      await event(db, run, "task_done", task.title, { summary: reply.summary ?? null });
-      continue;
-    }
-
-    const result = await runTool(ws, reply);
-    if (
-      result.ok &&
-      project.github_repo &&
-      reply.tool === "write_file" &&
-      reply.path
-    ) {
-      try {
-        const savedCommit = await saveFileToGithub(
-          ws,
-          project.github_repo,
-          reply.path,
-          `write_file ${reply.path}`,
-        );
+    for (const call of batch) {
+      if (call.tool === "done") {
         await db
-          .from("dev_projects")
-          .update({ head_commit: savedCommit, updated_at: new Date().toISOString() })
-          .eq("id", project.id);
-        result.output += `; synced to GitHub (${savedCommit.slice(0, 7)})`;
-      } catch (error) {
-        result.ok = false;
-        result.output = `File was written in the workspace but GitHub sync failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
+          .from("dev_tasks")
+          .update({ status: "done", result: (call.summary ?? reply?.summary ?? "").slice(0, 1000) })
+          .eq("id", task.id);
+        task.status = "done";
+        await event(db, run, "task_done", task.title, { summary: call.summary ?? null });
+        break;
       }
-    }
-    await event(
-      db,
-      run,
-      "tool",
-      `${reply.tool}${reply.path ? ` ${reply.path}` : reply.command ? ` ${String(reply.command).slice(0, 80)}` : ""}`,
-      { ok: result.ok, output: result.output.slice(0, 3000), thought: reply.thought ?? null },
-    );
-    await patchRun(db, run, { step: (run.step ?? 0) + 1 });
-    run.step = (run.step ?? 0) + 1;
 
-    if (run.step > MAX_TOOLS_PER_SLICE * 20) break; // hard safety stop
+      // Stall guard: the model loves to re-read the same file forever.
+      if (call.tool === "read_file" && call.path) {
+        if (readOnce.has(call.path)) {
+          await event(db, run, "tool", `skip read_file ${call.path}`, {
+            ok: false,
+            output: "Already read this file in this session — write the file or call done instead.",
+          });
+          continue;
+        }
+        readOnce.add(call.path);
+      }
+
+      const result = await runTool(ws, call);
+      if (result.ok && project.github_repo && call.tool === "write_file" && call.path) {
+        try {
+          const savedCommit = await saveFileToGithub(
+            ws,
+            project.github_repo,
+            call.path,
+            `write_file ${call.path}`,
+          );
+          await db
+            .from("dev_projects")
+            .update({ head_commit: savedCommit, updated_at: new Date().toISOString() })
+            .eq("id", project.id);
+          result.output += `; synced to GitHub (${savedCommit.slice(0, 7)})`;
+        } catch (error) {
+          result.ok = false;
+          result.output = `File was written in the workspace but GitHub sync failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+        }
+      }
+      await event(
+        db,
+        run,
+        "tool",
+        `${call.tool}${call.path ? ` ${call.path}` : call.command ? ` ${String(call.command).slice(0, 80)}` : ""}`,
+        { ok: result.ok, output: result.output.slice(0, 3000), thought: reply?.thought ?? null },
+      );
+      await patchRun(db, run, { step: (run.step ?? 0) + 1 });
+      run.step = (run.step ?? 0) + 1;
+    }
+
+    if ((run.step ?? 0) > MAX_TOOLS_PER_SLICE * 20) break; // hard safety stop
   }
+
 
   const remaining = tasks.some((t) => t.status !== "done" && t.status !== "failed");
   if (remaining) {
