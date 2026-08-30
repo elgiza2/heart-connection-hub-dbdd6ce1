@@ -407,7 +407,7 @@ export async function advanceDevRun(
           .update({
             deploy_url: deployUrl,
             screenshot_url: shot,
-            last_deployed_commit: commit,
+            deployed_commit: commit,
             updated_at: new Date().toISOString(),
           })
           .eq("id", project.id);
