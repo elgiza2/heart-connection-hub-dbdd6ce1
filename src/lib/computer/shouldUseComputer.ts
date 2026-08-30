@@ -13,6 +13,9 @@ const STRONG_EN = [
   /\b(book|order|buy|apply|fill (in|out)|submit)\b.*\b(form|ticket|flight|hotel|order|application)\b/i,
   /\b(build|create|generate)\b.*\b(project|repo|app|website|dashboard)\b.*\b(files?|zip|folder)\b/i,
   /\b(automate|automation)\b/i,
+  // "build me a website like Spotify", "make me an app", "clone X" — real
+  // build requests belong to the coding agent, not a chat reply.
+  /\b(build|make|create|design|develop|code|program|clone|rebuild)\b[^.\n]{0,40}\b(web ?site|web ?app|landing page|store|shop|dashboard|app|application|game|bot|script|clone|platform|saas)\b/i,
   /\bcomputer (use|task)\b/i,
   /\b(open|go to|visit|search (on|in|with))\b[^.\n]{0,20}\b(google|youtube|facebook|twitter|x\.com|gmail|amazon|linkedin|instagram|maps)\b/i,
   /\b(take|grab|capture)\b[^.\n]{0,20}\bscreenshots?\b/i,
@@ -41,6 +44,9 @@ const STRONG_AR = [
   /(اعمل|اجمع|جمع|لخص|حلل|راقب|تابع|قارن)\s+.*(بحث|تقرير|اخبار|اسعار|بيانات|منافسين|سوق)/i,
   /(اصلح|صلح|ظبط|نفذ|كمل|ابني|انشئ)\s+.*(المشروع|التطبيق|الموقع|الباك|الميزه|الميزة|الخطه|الخطة|المهمه|المهمة)/i,
   /(اربط|وصل)\s+.*(api|mcp|خدمه|خدمة|تكامل)/i,
+  // "سويلي موقع زي سبوتيفاي" / "اعملي تطبيق" / "ابنيلي متجر" — build asks go
+  // to the coding agent so it actually does the work.
+  /(سو[يى]|سويلي|سو[يى]\s*لي|اعمل|اعملي|اعمل\s*لي|إعمل|ابن[يى]|ابنيلي|ابن[يى]\s*لي|انشئ|أنشئ|صمم|صممي|صمم\s*لي|طور|برمج|برمجلي|اكتب\s*لي|كلون)\s*(لي|لنا)?\s*[^.\n]{0,30}(موقع|ويب\s*سايت|تطبيق|ابليكيشن|أبليكيشن|منصه|منصة|متجر|ستور|لعبه|لعبة|بوت|سكربت|داشبورد|لوحه\s*تحكم|صفحه\s*هبوط|لاندنج|نظام|برنامج)/i,
 
   /(سكرين\s*شوت|screenshot|لقطه\s*شاشه|صوره\s*للشاشه)/i,
   /(https?:\/\/|www\.)/i,
