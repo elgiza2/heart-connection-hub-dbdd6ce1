@@ -9,7 +9,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { FreestyleClient } from "./freestyle";
 import { DevWorkspace, runTool, screenshotUrl, type ToolCall } from "./tools";
-import { askJson, askModel } from "./llm";
+import { askJson, askModel, extractJson } from "./llm";
 import {
   ensurePrivateGithubRepo,
   restoreWorkspaceFromGithub,
@@ -315,9 +315,7 @@ export async function advanceDevRun(
     // instead of blowing far past SLICE_MS and leaving the client silent.
     if (Date.now() - started > SLICE_MS - 150_000) break;
 
-    const reply = await askJson<
-      ToolCall & { thought?: string; summary?: string; tools?: (ToolCall & { summary?: string })[] }
-    >(
+    const rawReply = await askModel(
       token,
       CODER_SYSTEM,
       [
@@ -334,6 +332,10 @@ export async function advanceDevRun(
       ],
     );
 
+    const reply = extractJson<
+      ToolCall & { thought?: string; summary?: string; tools?: (ToolCall & { summary?: string })[] }
+    >(rawReply);
+
     const batch = (Array.isArray(reply?.tools) && reply!.tools!.length
       ? reply!.tools!
       : reply?.tool
@@ -346,6 +348,11 @@ export async function advanceDevRun(
       // couple of times before giving up on it.
       const misses = (noToolCall.get(task.id) ?? 0) + 1;
       noToolCall.set(task.id, misses);
+      // Surface why: an empty/garbled model reply is otherwise invisible.
+      await event(db, run, "tool", `invalid model reply (${rawReply.length} chars)`, {
+        ok: false,
+        output: rawReply.slice(0, 1500) || "(empty response from model)",
+      });
       if (misses < 3) continue;
       await db.from("dev_tasks").update({ status: "failed", result: "no tool call" }).eq("id", task.id);
       task.status = "failed";
