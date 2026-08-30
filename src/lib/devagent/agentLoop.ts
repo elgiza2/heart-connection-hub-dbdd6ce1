@@ -263,6 +263,10 @@ export async function advanceDevRun(
         return `- ${e.title}${p.output ? ` → ${String(p.output).slice(0, 500)}` : ""}`;
       });
 
+    // The coder call itself can take up to ~40s — end the slice early
+    // instead of blowing far past SLICE_MS and leaving the client silent.
+    if (Date.now() - started > SLICE_MS - 45_000) break;
+
     const reply = await askJson<ToolCall & { thought?: string; summary?: string }>(
       token,
       CODER_SYSTEM,
