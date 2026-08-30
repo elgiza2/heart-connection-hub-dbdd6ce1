@@ -74,7 +74,11 @@ React 18 + Vite + TypeScript + Tailwind project at /app. You output ONE tool cal
 {"thought":"...","tool":"build"}
 {"thought":"...","tool":"done","summary":"<what you changed>"}
 
+You MAY return several calls at once to move faster:
+{"thought":"...","tools":[{"tool":"write_file","path":"src/a.tsx","content":"..."},{"tool":"write_file","path":"src/b.tsx","content":"..."}]}
+
 Rules:
+- Prefer batching 2-4 write_file calls per reply. Only read a file once; never read the same file twice.
 - write_file always contains the COMPLETE final file, never a diff or placeholder.
 - Build real, production-quality React components — multiple files, typed props, Tailwind styling.
 - Never write index.html-only apps. Never use CDN React.
