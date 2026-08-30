@@ -395,7 +395,7 @@ export async function advanceDevRun(
     } else {
       await event(db, run, "status", "جاري النشر");
       try {
-        deployUrl = await ws.publishDist();
+        deployUrl = await ws.publishDist(`megsy-live-${project.id.replace(/-/g, "").slice(0, 12)}`);
         shot = deployUrl ? screenshotUrl(deployUrl) : null;
         await db.from("dev_deploys").insert({
           user_id: run.user_id,
