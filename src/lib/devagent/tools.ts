@@ -55,6 +55,8 @@ export class DevWorkspace {
         const state = String(info?.state ?? "").toLowerCase();
         if (info && state !== "deleted" && state !== "deleting") {
           if (state !== "running") await client.startVm(existingVmId);
+          // Older VMs may have a root-owned workdir from the fs API.
+          await client.exec(existingVmId, `sudo mkdir -p ${WORKDIR} && sudo chown -R $(id -un):$(id -gn) ${WORKDIR}`, 30_000).catch(() => null);
           return {
             ws: new DevWorkspace(client, existingVmId),
             vmId: existingVmId,
@@ -69,7 +71,8 @@ export class DevWorkspace {
     const vm = await client.createVm({ idleTimeoutSeconds: 1800 });
     const ws = new DevWorkspace(client, vm.id);
     await client.waitForRunning(vm.id);
-    await ws.bash(`mkdir -p ${WORKDIR}`, 30_000);
+    // NOTE: ws.bash cds into WORKDIR first, which fails before the dir exists.
+    await client.exec(vm.id, `sudo mkdir -p ${WORKDIR} && sudo chown -R $(id -un):$(id -gn) ${WORKDIR}`, 30_000);
     // v5 VMs have no implicit domain — route a style.dev name to port 3000.
     const previewDomain = await client.exposePort(vm.id, 3000);
     return {
@@ -98,9 +101,11 @@ export class DevWorkspace {
   async scaffold(): Promise<ExecResult> {
     // exec-await caps each call at ~290s, so scaffold runs in stages.
     const stages: Array<{ cmd: string; timeout: number }> = [
-      { cmd: "npm create vite@latest . -- --template react-ts --yes && npm pkg set dependencies.react=^18.3.1 dependencies.react-dom=^18.3.1", timeout: 240_000 },
+      { cmd: "printf '%s' '{\"name\":\"app\",\"private\":true,\"version\":\"0.0.0\"}' > package.json && npm create vite@latest . -- --template react-ts --yes && npm pkg set dependencies.react=^18.3.1 dependencies.react-dom=^18.3.1", timeout: 240_000 },
       { cmd: "npm install && npm install react-router-dom lucide-react clsx", timeout: 280_000 },
-      { cmd: "npm install -D tailwindcss@^3.4.17 postcss autoprefixer && npx tailwindcss init -p", timeout: 280_000 },
+      // postcss/tailwind configs must be .cjs — create-vite sets
+      // "type": "module", so module.exports in a .js file crashes Vite.
+      { cmd: "npm install -D tailwindcss@^3.4.17 postcss autoprefixer && npx tailwindcss init -p && for f in postcss.config tailwind.config; do [ -f $f.js ] && grep -q 'module.exports' $f.js && mv $f.js $f.cjs; done; true", timeout: 280_000 },
       {
         cmd: [
           `printf '%s\\n' "/** @type {import('tailwindcss').Config} */" "export default { content: ['./index.html','./src/**/*.{js,ts,jsx,tsx}'], theme: { extend: {} }, plugins: [] }" > tailwind.config.js`,
@@ -126,10 +131,44 @@ export class DevWorkspace {
     );
   }
 
+  /**
+   * Makes sure the workspace can actually serve: vite + react plugin installed
+   * locally and a config that accepts the style.dev preview host (Vite blocks
+   * unknown Host headers with 403 otherwise).
+   */
+  async ensureDevServerDeps(): Promise<void> {
+    const cfg = await this.client.readFile(this.vmId, `${WORKDIR}/vite.config.ts`).catch(() => "");
+    if (!cfg.includes("allowedHosts")) {
+      await this.client.writeFile(
+        this.vmId,
+        // .js wins over .ts in Vite's config resolution, so this always applies.
+        `${WORKDIR}/vite.config.js`,
+        [
+          "import { defineConfig } from 'vite';",
+          "import react from '@vitejs/plugin-react';",
+          "export default defineConfig({ plugins: [react()], server: { host: true, allowedHosts: true }, preview: { host: true, allowedHosts: true } });",
+          "",
+        ].join("\n"),
+      ).catch(() => undefined);
+    }
+    await this.bash(
+      "test -x node_modules/.bin/vite || npm i -D vite @vitejs/plugin-react > /tmp/vite-install.log 2>&1 || true",
+      280_000,
+    );
+    // CJS configs break under "type": "module" — normalize to .cjs.
+    await this.bash(
+      "for f in postcss.config tailwind.config; do [ -f $f.js ] && grep -q 'module.exports' $f.js && mv $f.js $f.cjs; done; true",
+      30_000,
+    );
+  }
+
   /** Starts the Vite dev server on port 3000 (the VM's public preview port). */
   async startDevServer(): Promise<void> {
+    await this.ensureDevServerDeps();
     await this.bash(
-      "pkill -f 'vite' || true; nohup npx vite --host 0.0.0.0 --port 3000 > /tmp/dev.log 2>&1 & sleep 2; true",
+      // Kill by port, not by name: pkill -f 'vite' matches this very shell's
+      // own cmdline (it contains "npx vite …") and kills itself (exit 143).
+      "(fuser -k 3000/tcp 2>/dev/null || kill $(lsof -ti:3000) 2>/dev/null || true); (nohup npx vite --host 0.0.0.0 --port 3000 > /tmp/dev.log 2>&1 &) ; sleep 3; true",
       60_000,
     );
   }

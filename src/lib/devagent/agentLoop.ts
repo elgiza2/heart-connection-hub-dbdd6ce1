@@ -183,11 +183,15 @@ export async function advanceDevRun(
     const restored = project.github_repo
       ? await restoreWorkspaceFromGithub(ws, project.github_repo)
       : false;
-    const res = restored
-      ? { exitCode: 0, stdout: "restored from private GitHub storage", stderr: "" }
-      : githubUrl
-        ? await ws.importGithub(githubUrl)
-        : await ws.scaffold();
+    // A restore that yields no actual project (e.g. the repo only has its
+    // auto-generated README) must fall through to a real scaffold.
+    let res: { exitCode: number; stdout: string; stderr: string };
+    if (restored && (await ws.hasProject())) {
+      res = { exitCode: 0, stdout: "restored from private GitHub storage", stderr: "" };
+    } else {
+      if (restored) await ws.bash("rm -rf ./* ./.[!.]* 2>/dev/null || true", 30_000);
+      res = githubUrl ? await ws.importGithub(githubUrl) : await ws.scaffold();
+    }
     if (res.exitCode !== 0 && !(await ws.hasProject())) {
       await event(db, run, "error", "فشل تجهيز المشروع", { output: res.stderr.slice(0, 2000) });
       await patchRun(db, run, { status: "error", error: "Scaffold failed" });
