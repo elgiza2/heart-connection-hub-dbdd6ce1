@@ -55,6 +55,8 @@ export class DevWorkspace {
         const state = String(info?.state ?? "").toLowerCase();
         if (info && state !== "deleted" && state !== "deleting") {
           if (state !== "running") await client.startVm(existingVmId);
+          // Older VMs may have a root-owned workdir from the fs API.
+          await client.exec(existingVmId, `sudo mkdir -p ${WORKDIR} && sudo chown -R $(id -un):$(id -gn) ${WORKDIR}`, 30_000).catch(() => null);
           return {
             ws: new DevWorkspace(client, existingVmId),
             vmId: existingVmId,
