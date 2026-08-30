@@ -271,9 +271,6 @@ export async function advanceDevRun(
       token,
       CODER_SYSTEM,
       [
-      token,
-      CODER_SYSTEM,
-      [
         {
           role: "user",
           content: [
