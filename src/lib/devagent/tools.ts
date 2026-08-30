@@ -125,6 +125,22 @@ export class DevWorkspace {
     return this.client.readFile(this.vmId, `${WORKDIR}/${path.replace(/^\/+/, "")}`);
   }
 
+  /** Text project snapshot used by the private GitHub persistence layer. */
+  async projectFiles(): Promise<Array<{ path: string; content: string }>> {
+    const listed = await this.bash(
+      "find . -type f -size -2M -not -path './node_modules/*' -not -path './.git/*' -not -path './dist/*' -not -name '.env' -print | sed 's#^./##' | sort | head -400",
+      45_000,
+    );
+    const paths = listed.stdout.split("\n").map((path) => path.trim()).filter(Boolean);
+    const files: Array<{ path: string; content: string }> = [];
+    for (const path of paths) {
+      const content = await this.readFile(path);
+      if (content.includes("\u0000")) continue;
+      files.push({ path, content });
+    }
+    return files;
+  }
+
   /** Compact file tree the model can reason about, ignoring noise. */
   async tree(depth = 3): Promise<string> {
     const res = await this.bash(

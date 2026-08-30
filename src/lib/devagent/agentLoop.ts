@@ -10,6 +10,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { FreestyleClient } from "./freestyle";
 import { DevWorkspace, runTool, screenshotUrl, type ToolCall } from "./tools";
 import { askJson, askModel } from "./llm";
+import {
+  ensurePrivateGithubRepo,
+  restoreWorkspaceFromGithub,
+  saveWorkspaceToGithub,
+} from "./githubStorage";
 
 const SLICE_MS = 50_000;
 const MAX_TOOLS_PER_SLICE = 6;
@@ -71,6 +76,7 @@ interface ProjectRow {
   deploy_url: string | null;
   title: string | null;
   status: string | null;
+  github_repo: string | null;
 }
 
 async function event(
@@ -160,11 +166,11 @@ export async function advanceDevRun(
   }
   if (!run.vm_id) await patchRun(db, run, { vm_id: boot.vmId });
 
-  // ---------------------------------------------------------------- repo
-  if (!project.repo_id) {
-    const repoId = await client.createRepo({ name: `proj-${project.id.slice(0, 8)}` });
-    await db.from("dev_projects").update({ repo_id: repoId }).eq("id", project.id);
-    project.repo_id = repoId;
+  // ------------------------------------------------------ private GitHub repo
+  if (!project.github_repo) {
+    const githubRepo = await ensurePrivateGithubRepo(project.id, project.github_repo);
+    await db.from("dev_projects").update({ github_repo: githubRepo }).eq("id", project.id);
+    project.github_repo = githubRepo;
   }
 
   // ---------------------------------------------------------------- scaffold
@@ -172,7 +178,14 @@ export async function advanceDevRun(
     await event(db, run, "status", "تجهيز المشروع (React 18 + Vite + Tailwind)");
     const meta = (run as unknown as { metadata?: { github_url?: string } }).metadata;
     const githubUrl = meta?.github_url;
-    const res = githubUrl ? await ws.importGithub(githubUrl) : await ws.scaffold();
+    const restored = project.github_repo
+      ? await restoreWorkspaceFromGithub(ws, project.github_repo)
+      : false;
+    const res = restored
+      ? { exitCode: 0, stdout: "restored from private GitHub storage", stderr: "" }
+      : githubUrl
+        ? await ws.importGithub(githubUrl)
+        : await ws.scaffold();
     if (res.exitCode !== 0 && !(await ws.hasProject())) {
       await event(db, run, "error", "فشل تجهيز المشروع", { output: res.stderr.slice(0, 2000) });
       await patchRun(db, run, { status: "error", error: "Scaffold failed" });
@@ -305,10 +318,16 @@ export async function advanceDevRun(
     output: build.stdout.slice(-2000),
   });
 
-  // ---------------------------------------------------------------- commit
+  // -------------------------------------------- private GitHub persistence
   await ws.startDevServer();
   let commit: string | null = null;
-  if (project.repo_id) commit = await ws.commit(project.repo_id, run.prompt.slice(0, 120) || "update");
+  if (project.github_repo) {
+    commit = await saveWorkspaceToGithub(
+      ws,
+      project.github_repo,
+      run.prompt.slice(0, 120) || "Update from Megsy",
+    );
+  }
   if (commit) {
     await db
       .from("dev_projects")
