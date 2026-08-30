@@ -218,7 +218,7 @@ export class DevWorkspace {
    * name — this is the published site. Persistence of the source itself is
    * handled by the private GitHub storage layer.
    */
-  async publishDist(): Promise<string> {
+  async publishDist(subdomain?: string): Promise<string> {
     const res = await this.bash("test -d dist && ls dist/index.html", 20_000);
     if (res.exitCode !== 0) throw new Error("No dist/ output to publish — run a build first");
     await this.bash(
