@@ -557,7 +557,13 @@ export async function advanceDevRun(
       ok: r.ok,
       output: r.output.slice(0, 1500),
     });
-    issues = await ws.staticIssues();
+    const next = await ws.staticIssues();
+    // No progress: the model cannot fix it, stop burning slices on a loop.
+    if (next.join("|") === issues.join("|")) {
+      issues = next;
+      break;
+    }
+    issues = next;
   }
   if (issues.length === 0) build = await ws.build();
 
