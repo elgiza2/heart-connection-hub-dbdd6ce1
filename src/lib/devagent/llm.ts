@@ -5,25 +5,61 @@
  */
 import { DEFAULT_MODEL } from "../defaultModel";
 
+/** Last transport-level failure, surfaced in run events for debugging. */
+export let lastModelError = "";
+
 export interface LlmMessage {
   role: "user" | "assistant";
   content: string;
 }
 
-/** One completion from the chat model. Returns "" when the call fails. */
+/**
+ * One completion from the chat model. Returns "" when the call fails.
+ *
+ * The fast lane (`chat-fast`) answers in ~1s and finishes a multi-file coding
+ * reply in ~10s, while `chat-alibaba` buffers long enough on big coding prompts
+ * to hit its 150s idle timeout — so the fast lane is the primary path and the
+ * full model is only the fallback.
+ */
 export async function askModel(
   token: string,
   system: string,
   messages: LlmMessage[],
-  timeoutMs = 120_000,
+  timeoutMs = 0,
 ): Promise<string> {
   const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  if (!supabaseUrl) {
+    lastModelError = "SUPABASE_URL missing";
+    return "";
+  }
+  const fast = await callChat(supabaseUrl, "chat-fast", token, system, messages, timeoutMs, {
+    model: "qwen-flash",
+    force: true,
+    system,
+  });
+  if (fast) return fast;
+  return await callChat(supabaseUrl, "chat-alibaba", token, system, messages, timeoutMs, {
+    model: DEFAULT_MODEL,
+    chatMode: "normal",
+  });
+}
+
+async function callChat(
+  supabaseUrl: string,
+  fn: string,
+  token: string,
+  system: string,
+  messages: LlmMessage[],
+  timeoutMs: number,
+  extra: Record<string, unknown>,
+): Promise<string> {
   const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY ||
     process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "";
-  if (!supabaseUrl) return "";
-  const url = `${supabaseUrl}/functions/v1/chat-alibaba`;
+  const url = `${supabaseUrl}/functions/v1/${fn}`;
+  // No artificial deadline by default: a coding reply that writes several full
+  // files routinely streams for minutes, and aborting throws that work away.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
     const resp = await fetch(url, {
       method: "POST",
@@ -32,15 +68,14 @@ export async function askModel(
         apikey: publishableKey,
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        messages,
-        model: DEFAULT_MODEL,
-        chatMode: "normal",
-        customSystem: system,
-      }),
+      body: JSON.stringify({ messages, customSystem: system, ...extra }),
       signal: controller.signal,
     });
-    if (!resp.ok || !resp.body) return "";
+    if (!resp.ok || !resp.body) {
+      lastModelError = `${fn} HTTP ${resp.status}: ${(await resp.text()).slice(0, 300)}`;
+      console.error("[devagent] model call failed", lastModelError);
+      return "";
+    }
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -64,11 +99,14 @@ export async function askModel(
         }
       }
     }
+    if (!out) lastModelError = `${fn}: empty stream`;
     return out;
-  } catch {
+  } catch (e) {
+    lastModelError = e instanceof Error ? `${fn} ${e.name}: ${e.message}` : String(e);
+    console.error("[devagent] model call error", lastModelError);
     return "";
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -77,7 +115,7 @@ export async function askJson<T = Record<string, unknown>>(
   token: string,
   system: string,
   messages: LlmMessage[],
-  timeoutMs = 120_000,
+  timeoutMs = 0,
 ): Promise<T | null> {
   const text = await askModel(token, system, messages, timeoutMs);
   return extractJson<T>(text);

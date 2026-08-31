@@ -9,7 +9,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { FreestyleClient } from "./freestyle";
 import { DevWorkspace, runTool, screenshotUrl, type ToolCall } from "./tools";
-import { askJson, askModel, extractJson } from "./llm";
+import { askJson, askModel, extractJson, lastModelError } from "./llm";
 import {
   ensurePrivateGithubRepo,
   restoreWorkspaceFromGithub,
@@ -76,9 +76,6 @@ React 18 + Vite + TypeScript + Tailwind project at /app. You output ONE tool cal
 {"thought":"...","tool":"build"}
 {"thought":"...","tool":"done","summary":"<what you changed>"}
 
-You MAY return several calls at once to move faster:
-{"thought":"...","tools":[{"tool":"write_file","path":"src/a.tsx","content":"..."},{"tool":"write_file","path":"src/b.tsx","content":"..."}]}
-
 KNOWN SCAFFOLD (never read or inspect these — they are already correct):
 package.json, index.html, vite.config.js, tailwind.config.cjs, postcss.config.cjs,
 src/main.tsx (mounts <App/> and imports src/index.css), src/App.tsx, src/index.css.
@@ -87,9 +84,11 @@ Tailwind, framer-motion, lucide-react, clsx and react-router-dom are installed.
 Rules:
 - START WRITING IMMEDIATELY. Do not explore the project. read_file/list_dir are almost
   never needed; use them at most once, and never on the scaffold files above.
-- Batch 2-4 write_file calls per reply — that is the expected way to work.
+- ONE write_file per reply. Your whole reply MUST stay under 5000 characters, otherwise
+  it gets cut off and is thrown away. Keep every file under ~140 lines; split a big screen
+  into several small components written over consecutive replies.
 - write_file always contains the COMPLETE final file, never a diff or placeholder.
-- Build real, production-quality React components — multiple files, typed props, Tailwind styling.
+- Build real, production-quality React components — typed props, Tailwind styling.
 - Never write index.html-only apps. Never use CDN React.
 - Install any other package you import, with bash, before using it.
 - Do not repeat a failed action unchanged; change approach.
@@ -156,7 +155,6 @@ export async function classify(token: string, prompt: string) {
     token,
     ROUTER_SYSTEM,
     [{ role: "user", content: prompt }],
-    45_000,
   );
   return {
     intent: (res?.intent ?? "edit") as Intent,
@@ -305,16 +303,17 @@ export async function advanceDevRun(
       .limit(120);
     const log = (priorEvents ?? [])
       .filter((e) => e.type === "tool")
-      .slice(-14)
+      .slice(-10)
       .map((e) => {
         const p = (e.payload ?? {}) as { output?: string };
-        return `- ${e.title}${p.output ? ` → ${String(p.output).slice(0, 500)}` : ""}`;
+        return `- ${e.title}${p.output ? ` → ${String(p.output).slice(0, 160)}` : ""}`;
       });
 
     // The coder call itself can take up to ~40s — end the slice early
     // instead of blowing far past SLICE_MS and leaving the client silent.
     if (Date.now() - started > SLICE_MS - 150_000) break;
 
+    const truncated = (noToolCall.get(task.id) ?? 0) > 0;
     const rawReply = await askModel(
       token,
       CODER_SYSTEM,
@@ -326,7 +325,9 @@ export async function advanceDevRun(
             `CURRENT TASK: ${task.title}`,
             `PROJECT FILES:\n${await ws.tree()}`,
             log.length ? `RECENT ACTIONS:\n${log.join("\n")}` : "RECENT ACTIONS: (none yet)",
-            "Reply with the next tool call(s) as JSON only. Batch 2-4 write_file calls when you can.",
+            truncated
+              ? "Your previous reply was CUT OFF because it was too long. Write ONE smaller file (under 100 lines) this time."
+              : "Reply with the next tool call as JSON only. One file per reply, under 5000 characters.",
           ].join("\n\n"),
         },
       ],
@@ -351,9 +352,9 @@ export async function advanceDevRun(
       // Surface why: an empty/garbled model reply is otherwise invisible.
       await event(db, run, "tool", `invalid model reply (${rawReply.length} chars)`, {
         ok: false,
-        output: rawReply.slice(0, 1500) || "(empty response from model)",
+        output: rawReply.slice(0, 1500) || `(empty response from model) ${lastModelError}`,
       });
-      if (misses < 3) continue;
+      if (misses < 4) continue;
       await db.from("dev_tasks").update({ status: "failed", result: "no tool call" }).eq("id", task.id);
       task.status = "failed";
       continue;
