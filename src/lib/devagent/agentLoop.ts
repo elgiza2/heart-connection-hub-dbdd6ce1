@@ -9,7 +9,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { FreestyleClient } from "./freestyle";
 import { DevWorkspace, runTool, screenshotUrl, type ToolCall } from "./tools";
-import { askJson, askModel, extractJson } from "./llm";
+import { askJson, askModel, extractJson, lastModelError } from "./llm";
 import {
   ensurePrivateGithubRepo,
   restoreWorkspaceFromGithub,
@@ -156,7 +156,6 @@ export async function classify(token: string, prompt: string) {
     token,
     ROUTER_SYSTEM,
     [{ role: "user", content: prompt }],
-    45_000,
   );
   return {
     intent: (res?.intent ?? "edit") as Intent,
@@ -351,7 +350,7 @@ export async function advanceDevRun(
       // Surface why: an empty/garbled model reply is otherwise invisible.
       await event(db, run, "tool", `invalid model reply (${rawReply.length} chars)`, {
         ok: false,
-        output: rawReply.slice(0, 1500) || "(empty response from model)",
+        output: rawReply.slice(0, 1500) || `(empty response from model) ${lastModelError}`,
       });
       if (misses < 3) continue;
       await db.from("dev_tasks").update({ status: "failed", result: "no tool call" }).eq("id", task.id);
