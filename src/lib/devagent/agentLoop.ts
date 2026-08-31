@@ -76,9 +76,6 @@ React 18 + Vite + TypeScript + Tailwind project at /app. You output ONE tool cal
 {"thought":"...","tool":"build"}
 {"thought":"...","tool":"done","summary":"<what you changed>"}
 
-You MAY return several calls at once to move faster:
-{"thought":"...","tools":[{"tool":"write_file","path":"src/a.tsx","content":"..."},{"tool":"write_file","path":"src/b.tsx","content":"..."}]}
-
 KNOWN SCAFFOLD (never read or inspect these — they are already correct):
 package.json, index.html, vite.config.js, tailwind.config.cjs, postcss.config.cjs,
 src/main.tsx (mounts <App/> and imports src/index.css), src/App.tsx, src/index.css.
@@ -87,9 +84,11 @@ Tailwind, framer-motion, lucide-react, clsx and react-router-dom are installed.
 Rules:
 - START WRITING IMMEDIATELY. Do not explore the project. read_file/list_dir are almost
   never needed; use them at most once, and never on the scaffold files above.
-- Batch 2-4 write_file calls per reply — that is the expected way to work.
+- ONE write_file per reply. Your whole reply MUST stay under 5000 characters, otherwise
+  it gets cut off and is thrown away. Keep every file under ~140 lines; split a big screen
+  into several small components written over consecutive replies.
 - write_file always contains the COMPLETE final file, never a diff or placeholder.
-- Build real, production-quality React components — multiple files, typed props, Tailwind styling.
+- Build real, production-quality React components — typed props, Tailwind styling.
 - Never write index.html-only apps. Never use CDN React.
 - Install any other package you import, with bash, before using it.
 - Do not repeat a failed action unchanged; change approach.
