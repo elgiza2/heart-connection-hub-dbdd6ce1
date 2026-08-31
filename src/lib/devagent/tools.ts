@@ -363,31 +363,37 @@ export class DevWorkspace {
         `The router is mounted in more than one file (${routerFiles.join(", ")}). Keep exactly one <BrowserRouter> — in src/App.tsx — and remove it from the others.`,
       );
     }
-    const missing = await this.bash(
-      // Every relative import must resolve to a real file.
-      "for f in $(grep -rhoE \"from '\\./[^']+'|from '\\.\\./[^']+'\" src 2>/dev/null | sed -E \"s/from '(.*)'/\\1/\" | sort -u); do :; done; " +
-        "grep -rn \"from '\\.\" src 2>/dev/null | sed -E \"s/:.*from '(.*)'.*/ -> \\1/\" | head -200",
+    // Every relative import must resolve to a real file. Parsing happens here
+    // (not in shell) so quotes and `../` segments are handled correctly.
+    const rawImports = await this.bash(
+      "grep -rnE \"from ['\\\"]\\\\.\" src 2>/dev/null | head -300",
       60_000,
     );
-    const lines = missing.stdout.split("\n").filter(Boolean);
-    const bad: string[] = [];
-    for (const line of lines) {
-      const [src, spec] = line.split(" -> ");
-      if (!src || !spec) continue;
-      const dir = src.split("/").slice(0, -1).join("/");
-      const target = spec.startsWith(".") ? `${dir}/${spec}` : spec;
-      bad.push(target);
+    const targets = new Set<string>();
+    for (const line of rawImports.stdout.split("\n")) {
+      const m = /^([^:]+):\d+:.*from\s+['"](\.[^'"]+)['"]/.exec(line.trim());
+      if (!m) continue;
+      const segs = m[1].split("/").slice(0, -1).concat(m[2].split("/"));
+      const stack: string[] = [];
+      for (const seg of segs) {
+        if (seg === "." || seg === "") continue;
+        if (seg === "..") stack.pop();
+        else stack.push(seg);
+      }
+      const target = stack.join("/");
+      if (target && /^[\w./-]+$/.test(target)) targets.add(target);
     }
-    if (bad.length) {
+    if (targets.size) {
       const check = await this.bash(
-        `for t in ${[...new Set(bad)].slice(0, 60).map((t) => `'${t.replace(/'/g, "")}'`).join(" ")}; do ` +
-          `ls $t $t.tsx $t.ts $t.jsx $t.js $t/index.tsx $t/index.ts > /dev/null 2>&1 || echo "MISSING $t"; done`,
+        `for t in ${[...targets].slice(0, 60).map((t) => `'${t}'`).join(" ")}; do ` +
+          `ls -d $t $t.tsx $t.ts $t.jsx $t.js $t/index.tsx $t/index.ts > /dev/null 2>&1 || echo "MISSING $t"; done`,
         60_000,
       );
       for (const m of check.stdout.split("\n").filter((l) => l.startsWith("MISSING "))) {
         issues.push(`${m.replace("MISSING ", "Imported file does not exist: ")} — create it or fix the import.`);
       }
     }
+
     const noDefault = await this.bash(
       "for f in $(ls src/components/*.tsx src/screens/*.tsx src/pages/*.tsx 2>/dev/null); do grep -q 'export default' $f || echo \"NODEFAULT $f\"; done",
       60_000,
