@@ -445,6 +445,19 @@ export async function advanceDevRun(
 
     for (const call of batch) {
       if (call.tool === "done") {
+        // Premature done is why generated apps end up as one page: the model
+        // "finishes" a screen task without writing a single file. Reject once.
+        if ((written.get(task.id) ?? []).length === 0) {
+          const skips = (noToolCall.get(`done:${task.id}`) ?? 0) + 1;
+          noToolCall.set(`done:${task.id}`, skips);
+          if (skips <= 2) {
+            await event(db, run, "tool", `rejected early done — ${task.title}`, {
+              ok: false,
+              output: "You called done without writing any file for this task. Write the real file(s) first.",
+            });
+            break;
+          }
+        }
         await db
           .from("dev_tasks")
           .update({ status: "done", result: (call.summary ?? "").slice(0, 1000) })
