@@ -61,11 +61,17 @@ const DESIGN_SYSTEM = `DESIGN BAR (non-negotiable):
 
 const PLANNER_SYSTEM = `You are the planner of an autonomous full-stack coding agent working in a real Linux VM
 with a React 18 + Vite + TypeScript + Tailwind project.
-Break the user's request into 4-8 concrete engineering tasks. Reply with JSON only:
+Break the user's request into 8-14 concrete engineering tasks. Reply with JSON only:
 {"tasks":["...","..."]}
 Each task must be independently verifiable and touch real files. No task about deploying.
-Plan a COMPLETE product: design tokens/layout shell, then each major screen or feature,
-then polish (animations, responsive, empty states).
+Plan a COMPLETE, multi-page product, in this order:
+1. design tokens in src/index.css + shared layout shell (sidebar/header, routes in src/App.tsx)
+2. shared data layer: src/data/*.ts with 20-40 realistic mock records
+3. ONE task per page — at least 4 routed pages under src/pages (e.g. Home, Browse/Explore,
+   Detail, Search, Library/Profile/Settings). Never merge two pages into one task.
+4. reusable components (cards, lists, player/detail panel, empty + loading states)
+5. polish: framer-motion transitions, responsive down to 375px, real <title>/meta.
+A single landing page is a FAILED plan.
 
 ${DESIGN_SYSTEM}`;
 
