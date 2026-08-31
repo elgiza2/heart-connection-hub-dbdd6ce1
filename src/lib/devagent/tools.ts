@@ -222,6 +222,7 @@ export class DevWorkspace {
   /** Starts the Vite dev server on port 3000 (the VM's public preview port). */
   async startDevServer(): Promise<void> {
     await this.ensureDevServerDeps();
+    await this.installMissingImports();
     await this.bash(
       // Kill by port, not by name: pkill -f 'vite' matches this very shell's
       // own cmdline (it contains "npx vite …") and kills itself (exit 143).
@@ -307,7 +308,42 @@ export class DevWorkspace {
 
   /** Type-checks + builds. This is the verifier's ground truth. */
   async build(): Promise<ExecResult> {
-    return this.bash("npm run build 2>&1 | tail -60", 480_000);
+    await this.installMissingImports();
+    // `| tail` would mask the build exit code — capture it explicitly.
+    return this.bash(
+      "npm run build > /tmp/build.log 2>&1; code=$?; tail -60 /tmp/build.log; exit $code",
+      480_000,
+    );
+  }
+
+  /**
+   * Installs every bare package the source imports but that is not in
+   * node_modules. The coder frequently imports a library (react-icons,
+   * zustand, …) without installing it, which serves a blank page.
+   */
+  async installMissingImports(): Promise<void> {
+    const scan = await this.bash(
+      "grep -rhoE \"from ['\\\"][^.@/][^'\\\"]*['\\\"]|from ['\\\"]@[^'\\\"]+['\\\"]\" src 2>/dev/null | sed -E \"s/.*['\\\"](.*)['\\\"]/\\1/\" | sort -u",
+      60_000,
+    );
+    const pkgs = new Set<string>();
+    for (const raw of scan.stdout.split("\n")) {
+      const spec = raw.trim();
+      if (!spec || spec.startsWith(".") || spec.startsWith("/")) continue;
+      const name = spec.startsWith("@")
+        ? spec.split("/").slice(0, 2).join("/")
+        : spec.split("/")[0];
+      if (!name || name === "react" || name === "react-dom") continue;
+      if (!/^[@a-z0-9][\w./-]*$/i.test(name)) continue;
+      pkgs.add(name);
+    }
+    if (!pkgs.size) return;
+    const list = [...pkgs].join(" ");
+    await this.bash(
+      `missing=""; for p in ${list}; do [ -d "node_modules/$p" ] || missing="$missing $p"; done; ` +
+        `[ -n "$missing" ] && npm install $missing > /tmp/auto-install.log 2>&1; true`,
+      280_000,
+    );
   }
 
   /** Writes Supabase credentials the generated app can use. */
