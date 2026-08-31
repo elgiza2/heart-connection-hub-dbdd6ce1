@@ -198,6 +198,35 @@ async function plan(token: string, prompt: string, tree: string): Promise<string
   return tasks.length ? tasks : [prompt];
 }
 
+/**
+ * Parses the coder's line protocol. Tolerates a missing trailing `<<<END>>>`
+ * (a cut-off reply still yields the partial file, which is better than nothing)
+ * and stray markdown fences.
+ */
+export function parseToolReply(raw: string): (ToolCall & { summary?: string })[] {
+  if (!raw) return [];
+  const text = raw.replace(/```[a-zA-Z]*\n?/g, "");
+  const blocks = text.split("<<<END>>>").map((b) => b.trim()).filter(Boolean);
+  const calls: (ToolCall & { summary?: string })[] = [];
+  for (const block of blocks) {
+    const toolMatch = block.match(/^\s*TOOL:\s*(\w+)\s*$/m);
+    if (!toolMatch) continue;
+    const tool = toolMatch[1] as ToolCall["tool"];
+    const path = block.match(/^\s*PATH:\s*(.+)$/m)?.[1]?.trim();
+    const command = block.match(/^\s*CMD:\s*(.+)$/m)?.[1]?.trim();
+    const summary = block.match(/^\s*SUMMARY:\s*([\s\S]*)$/m)?.[1]?.trim();
+    let content: string | undefined;
+    const bodyIdx = block.indexOf("\nBODY:");
+    if (bodyIdx !== -1) {
+      content = block.slice(bodyIdx + "\nBODY:".length).replace(/^\n/, "");
+    }
+    if (tool === "write_file" && (!path || !content)) continue;
+    calls.push({ tool, path, command, content, summary } as ToolCall & { summary?: string });
+    if (calls.length >= 4) break;
+  }
+  return calls;
+}
+
 /** Runs one bounded slice. Returns true when the whole run is finished. */
 export async function advanceDevRun(
   db: SupabaseClient,
@@ -457,7 +486,7 @@ export async function advanceDevRun(
         run,
         "tool",
         `${call.tool}${call.path ? ` ${call.path}` : call.command ? ` ${String(call.command).slice(0, 80)}` : ""}`,
-        { ok: result.ok, output: result.output.slice(0, 3000), thought: reply?.thought ?? null },
+        { ok: result.ok, output: result.output.slice(0, 3000), thought: null },
       );
       await patchRun(db, run, { step: (run.step ?? 0) + 1 });
       run.step = (run.step ?? 0) + 1;
