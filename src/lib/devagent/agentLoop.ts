@@ -61,11 +61,17 @@ const DESIGN_SYSTEM = `DESIGN BAR (non-negotiable):
 
 const PLANNER_SYSTEM = `You are the planner of an autonomous full-stack coding agent working in a real Linux VM
 with a React 18 + Vite + TypeScript + Tailwind project.
-Break the user's request into 4-8 concrete engineering tasks. Reply with JSON only:
+Break the user's request into 8-14 concrete engineering tasks. Reply with JSON only:
 {"tasks":["...","..."]}
 Each task must be independently verifiable and touch real files. No task about deploying.
-Plan a COMPLETE product: design tokens/layout shell, then each major screen or feature,
-then polish (animations, responsive, empty states).
+Plan a COMPLETE, multi-page product, in this order:
+1. design tokens in src/index.css + shared layout shell (sidebar/header, routes in src/App.tsx)
+2. shared data layer: src/data/*.ts with 20-40 realistic mock records
+3. ONE task per page — at least 4 routed pages under src/pages (e.g. Home, Browse/Explore,
+   Detail, Search, Library/Profile/Settings). Never merge two pages into one task.
+4. reusable components (cards, lists, player/detail panel, empty + loading states)
+5. polish: framer-motion transitions, responsive down to 375px, real <title>/meta.
+A single landing page is a FAILED plan.
 
 ${DESIGN_SYSTEM}`;
 
@@ -124,6 +130,11 @@ Rules:
 - Only import files that already exist or that you have written in this task.
 - Install any other package you import, with bash, before using it.
 - Do not repeat a file you already wrote; move on or call done.
+- NEVER call done before you have written at least one real file for the CURRENT
+  task. A page task is only done when the page renders a full screen of content
+  (header, real mock data list/grid, interactive state) — not a heading.
+- Pages live in src/pages/<Name>.tsx and are routed from src/App.tsx; shared mock
+  data lives in src/data/*.ts so every page reads from it.
 - Exception to the scaffold rule: rewrite index.html once to set a real
   <title> and <meta name="description"> for the product (keep the
   <div id="root"> and the /src/main.tsx script tag unchanged).
@@ -204,7 +215,7 @@ async function plan(token: string, prompt: string, tree: string): Promise<string
       content: `REQUEST:\n${prompt}\n\nCURRENT PROJECT FILES:\n${tree || "(empty project)"}`,
     },
   ]);
-  const tasks = (res?.tasks ?? []).filter((t) => typeof t === "string" && t.trim()).slice(0, 8);
+  const tasks = (res?.tasks ?? []).filter((t) => typeof t === "string" && t.trim()).slice(0, 14);
   return tasks.length ? tasks : [prompt];
 }
 
@@ -434,6 +445,19 @@ export async function advanceDevRun(
 
     for (const call of batch) {
       if (call.tool === "done") {
+        // Premature done is why generated apps end up as one page: the model
+        // "finishes" a screen task without writing a single file. Reject once.
+        if ((written.get(task.id) ?? []).length === 0) {
+          const skips = (noToolCall.get(`done:${task.id}`) ?? 0) + 1;
+          noToolCall.set(`done:${task.id}`, skips);
+          if (skips <= 2) {
+            await event(db, run, "tool", `rejected early done — ${task.title}`, {
+              ok: false,
+              output: "You called done without writing any file for this task. Write the real file(s) first.",
+            });
+            break;
+          }
+        }
         await db
           .from("dev_tasks")
           .update({ status: "done", result: (call.summary ?? "").slice(0, 1000) })
@@ -457,8 +481,8 @@ export async function advanceDevRun(
 
       if (call.tool === "write_file" && call.path) {
         const list = written.get(task.id) ?? [];
-        if (list.filter((p) => p === call.path).length >= 2) {
-          // Third attempt at the same file in one task: the model is looping.
+        if (list.filter((p) => p === call.path).length >= 3) {
+          // Fourth attempt at the same file in one task: the model is looping.
           await db
             .from("dev_tasks")
             .update({ status: "done", result: `wrote ${list.length} files` })
@@ -511,6 +535,32 @@ export async function advanceDevRun(
     await patchRun(db, run, { status: "running" });
     return false;
   }
+
+  // --------------------------------------------------- completeness gate
+  // All tasks "done" but the app is still a skeleton? Queue one extra round
+  // of real tasks instead of shipping a single page. Runs at most twice.
+  const { data: gateEvents } = await db
+    .from("dev_events")
+    .select("id")
+    .eq("run_id", run.id)
+    .eq("type", "completeness");
+  if ((gateEvents?.length ?? 0) < 2 && run.intent !== "question") {
+    const gaps = await ws.completenessIssues();
+    if (gaps.length) {
+      await event(db, run, "completeness", `المشروع ناقص — ${gaps.length} فجوة`, { gaps });
+      const extra = gaps.map((gap, i) => ({
+        run_id: run.id,
+        user_id: run.user_id,
+        position: tasks.length + i,
+        title: gap.slice(0, 200),
+        status: "pending",
+      }));
+      await db.from("dev_tasks").insert(extra);
+      await patchRun(db, run, { status: "running" });
+      return false;
+    }
+  }
+
 
   // ---------------------------------------------------------------- verify
   await event(db, run, "status", "التحقق من البناء");

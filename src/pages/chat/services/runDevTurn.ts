@@ -33,17 +33,38 @@ export function stripDevMention(text: string): string {
   return text.replace(/@dev\b/gi, "").trim();
 }
 
-/** Live progress lines — rendered inside the thinking trace while running. */
-function renderTrace(state: DevState): string {
-  const lines: string[] = [];
-  for (const t of state.tasks ?? []) {
-    const mark = t.status === "done" ? "✅" : t.status === "running" ? "⏳" : t.status === "failed" ? "❌" : "•";
-    lines.push(`${mark} ${t.title}`);
-  }
-  for (const e of (state.events ?? []).slice(-6)) {
-    if (e.type === "tool" && e.title) lines.push(e.title);
-  }
-  return lines.join("\n").trim();
+/**
+ * Accumulating live trace. The server only returns the latest slice of events,
+ * so the trace is kept in a stateful accumulator: task lines are updated in
+ * place by id and activity lines are append-only, so nothing already shown to
+ * the user is ever wiped.
+ */
+function createTraceAccumulator() {
+  const tasks = new Map<string, string>();
+  const taskOrder: string[] = [];
+  const activity: string[] = [];
+  const seenEvents = new Set<string>();
+
+  return (state: DevState): string => {
+    for (const t of state.tasks ?? []) {
+      const mark =
+        t.status === "done" ? "✅" : t.status === "running" ? "⏳" : t.status === "failed" ? "❌" : "•";
+      const id = String((t as any).id ?? t.title);
+      if (!tasks.has(id)) taskOrder.push(id);
+      tasks.set(id, `${mark} ${t.title}`);
+    }
+    for (const e of state.events ?? []) {
+      const id = String((e as any).id ?? `${e.type}:${e.title}`);
+      if (seenEvents.has(id)) continue;
+      seenEvents.add(id);
+      if ((e.type === "tool" || e.type === "status" || e.type === "completeness") && e.title) {
+        activity.push(e.title);
+      }
+    }
+    return [...taskOrder.map((id) => tasks.get(id)!), ...activity.slice(-14)]
+      .join("\n")
+      .trim();
+  };
 }
 
 /** Final answer body — only shown once the run finished. */
@@ -103,8 +124,9 @@ export async function runDevTurn({
 
     const started = await startDevRun(prompt, cid);
     let trace = "";
+    const accumulateTrace = createTraceAccumulator();
     const final = await driveDevRun(started.run.id, (state) => {
-      const t = renderTrace(state);
+      const t = accumulateTrace(state);
       if (t) trace = t;
       patch({ reasoning: trace });
     });
