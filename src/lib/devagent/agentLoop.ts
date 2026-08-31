@@ -48,6 +48,10 @@ const DESIGN_SYSTEM = `DESIGN BAR (non-negotiable):
   rounded-2xl cards, lucide-react icons, real typographic hierarchy.
 - Never default Inter-on-white with purple gradients. Pick one distinctive
   palette per project and define it as CSS variables in src/index.css.
+- src/index.css MUST start with the three lines "@tailwind base;",
+  "@tailwind components;", "@tailwind utilities;" before anything else —
+  removing them kills every Tailwind class in the app. Layout, spacing and
+  color come from Tailwind classes, not from hand-written CSS rules.
 - Full app, not a hero: navigation/sidebar, several routed screens or sections,
   interactive state (search, filters, playback, forms), empty/loading states,
   responsive down to 375px.
