@@ -124,8 +124,9 @@ export async function runDevTurn({
 
     const started = await startDevRun(prompt, cid);
     let trace = "";
+    const accumulateTrace = createTraceAccumulator();
     const final = await driveDevRun(started.run.id, (state) => {
-      const t = renderTrace(state);
+      const t = accumulateTrace(state);
       if (t) trace = t;
       patch({ reasoning: trace });
     });
