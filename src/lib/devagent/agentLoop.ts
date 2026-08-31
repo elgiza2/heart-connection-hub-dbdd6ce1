@@ -84,9 +84,10 @@ Tailwind, framer-motion, lucide-react, clsx and react-router-dom are installed.
 Rules:
 - START WRITING IMMEDIATELY. Do not explore the project. read_file/list_dir are almost
   never needed; use them at most once, and never on the scaffold files above.
-- ONE write_file per reply. Your whole reply MUST stay under 5000 characters, otherwise
-  it gets cut off and is thrown away. Keep every file under ~140 lines; split a big screen
-  into several small components written over consecutive replies.
+- ONE write_file per reply. Your whole reply MUST stay under 3500 characters, otherwise
+  it gets cut off and is thrown away. Keep every file under ~90 lines; split a big screen
+  into several small components written over consecutive replies. App.tsx should only hold
+  routes — put layout, sidebar, player and screens in their own small files.
 - write_file always contains the COMPLETE final file, never a diff or placeholder.
 - Build real, production-quality React components — typed props, Tailwind styling.
 - Never write index.html-only apps. Never use CDN React.
@@ -285,6 +286,8 @@ export async function advanceDevRun(
   const noToolCall = new Map<string, number>();
   /** Files already read this slice — re-reads are the classic stall loop. */
   const readOnce = new Set<string>();
+  /** Files written per task — rewriting the same file forever is the other stall. */
+  const written = new Map<string, string[]>();
   while (Date.now() - started < SLICE_MS) {
     const task = tasks.find((t) => t.status !== "done" && t.status !== "failed");
     if (!task) break;
@@ -311,9 +314,10 @@ export async function advanceDevRun(
 
     // The coder call itself can take up to ~40s — end the slice early
     // instead of blowing far past SLICE_MS and leaving the client silent.
-    if (Date.now() - started > SLICE_MS - 150_000) break;
+    if (Date.now() - started > SLICE_MS - 40_000) break;
 
     const truncated = (noToolCall.get(task.id) ?? 0) > 0;
+    const doneFiles = written.get(task.id) ?? [];
     const rawReply = await askModel(
       token,
       CODER_SYSTEM,
@@ -325,10 +329,13 @@ export async function advanceDevRun(
             `CURRENT TASK: ${task.title}`,
             `PROJECT FILES:\n${await ws.tree()}`,
             log.length ? `RECENT ACTIONS:\n${log.join("\n")}` : "RECENT ACTIONS: (none yet)",
+            doneFiles.length
+              ? `FILES ALREADY WRITTEN FOR THIS TASK (do NOT rewrite them):\n${doneFiles.join("\n")}\nWrite the next missing file, or reply {"tool":"done","summary":"..."} if the task is complete.`
+              : "",
             truncated
               ? "Your previous reply was CUT OFF because it was too long. Write ONE smaller file (under 100 lines) this time."
-              : "Reply with the next tool call as JSON only. One file per reply, under 5000 characters.",
-          ].join("\n\n"),
+              : "Reply with the next tool call as JSON only. One file per reply, under 3500 characters.",
+          ].filter(Boolean).join("\n\n"),
         },
       ],
     );
@@ -384,6 +391,21 @@ export async function advanceDevRun(
         readOnce.add(call.path);
       }
 
+      if (call.tool === "write_file" && call.path) {
+        const list = written.get(task.id) ?? [];
+        if (list.filter((p) => p === call.path).length >= 2) {
+          // Third attempt at the same file in one task: the model is looping.
+          await db
+            .from("dev_tasks")
+            .update({ status: "done", result: `wrote ${list.length} files` })
+            .eq("id", task.id);
+          task.status = "done";
+          await event(db, run, "task_done", task.title, { summary: "auto-closed (repeat writes)" });
+          break;
+        }
+        list.push(call.path);
+        written.set(task.id, list);
+      }
       const result = await runTool(ws, call);
       if (result.ok && project.github_repo && call.tool === "write_file" && call.path) {
         try {
