@@ -215,7 +215,7 @@ async function plan(token: string, prompt: string, tree: string): Promise<string
       content: `REQUEST:\n${prompt}\n\nCURRENT PROJECT FILES:\n${tree || "(empty project)"}`,
     },
   ]);
-  const tasks = (res?.tasks ?? []).filter((t) => typeof t === "string" && t.trim()).slice(0, 8);
+  const tasks = (res?.tasks ?? []).filter((t) => typeof t === "string" && t.trim()).slice(0, 14);
   return tasks.length ? tasks : [prompt];
 }
 
