@@ -533,6 +533,7 @@ export async function advanceDevRun(
   }
   // Static runtime guard: a green build still blanks the page on duplicate
   // routers / missing files, so fix those with the same repair loop.
+  await ws.normalizeEntrypoint();
   let issues = await ws.staticIssues();
   for (let i = 0; issues.length && i < MAX_BUILD_FIXES; i++) {
     await event(db, run, "status", `إصلاح ${issues.length} مشكلة تشغيل`, { output: issues.join("\n") });
@@ -557,7 +558,13 @@ export async function advanceDevRun(
       ok: r.ok,
       output: r.output.slice(0, 1500),
     });
-    issues = await ws.staticIssues();
+    const next = await ws.staticIssues();
+    // No progress: the model cannot fix it, stop burning slices on a loop.
+    if (next.join("|") === issues.join("|")) {
+      issues = next;
+      break;
+    }
+    issues = next;
   }
   if (issues.length === 0) build = await ws.build();
 
