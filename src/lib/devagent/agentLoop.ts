@@ -115,6 +115,8 @@ Rules:
   components written over consecutive replies. App.tsx holds routes only.
 - write_file always contains the COMPLETE final file, never a diff or placeholder.
 - Every component file must have a \`export default\` at the end.
+- <BrowserRouter> is mounted exactly once, in src/App.tsx. Never put a Router
+  inside a screen, layout or component file.
 - Only import files that already exist or that you have written in this task.
 - Install any other package you import, with bash, before using it.
 - Do not repeat a file you already wrote; move on or call done.
