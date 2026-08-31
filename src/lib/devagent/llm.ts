@@ -35,6 +35,7 @@ export async function askModel(
   const fast = await callChat(supabaseUrl, "chat-fast", token, system, messages, timeoutMs, {
     model: "qwen-flash",
     force: true,
+    maxTokens: 8192,
     system,
   });
   if (fast) return fast;

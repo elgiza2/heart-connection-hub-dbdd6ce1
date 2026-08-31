@@ -184,8 +184,37 @@ export class FreestyleClient {
     };
     if (options.snapshotId) body.snapshotId = options.snapshotId;
 
-    const data = await this.request<{ id: string }>("POST", "/v5/vms", body);
-    return { id: data.id };
+    try {
+      const data = await this.request<{ id: string }>("POST", "/v5/vms", body);
+      return { id: data.id };
+    } catch (e) {
+      // The plan caps concurrent VMs; reclaim abandoned ones and retry once.
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/limit of \d+ VMs/i.test(msg)) throw e;
+      await this.reapIdleVms();
+      const data = await this.request<{ id: string }>("POST", "/v5/vms", body);
+      return { id: data.id };
+    }
+  }
+
+  /** Deletes every VM that is not currently running (paused/stopped leftovers). */
+  async reapIdleVms(): Promise<number> {
+    let removed = 0;
+    try {
+      const list = await this.request<{ vms?: { id: string; state?: string }[] }>("GET", "/v5/vms");
+      for (const vm of list.vms ?? []) {
+        if (vm.state === "running") continue;
+        try {
+          await this.deleteVm(vm.id);
+          removed++;
+        } catch {
+          /* another worker may have removed it already */
+        }
+      }
+    } catch {
+      /* listing failures must not mask the original create error */
+    }
+    return removed;
   }
 
   async getVm(vmId: string): Promise<Record<string, unknown>> {

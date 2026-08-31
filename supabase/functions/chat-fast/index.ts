@@ -70,7 +70,13 @@ Deno.serve(async (req) => {
     });
   }
 
-  let body: { messages?: Msg[]; customSystem?: string; model?: string; force?: boolean };
+  let body: {
+    messages?: Msg[];
+    customSystem?: string;
+    model?: string;
+    force?: boolean;
+    maxTokens?: number;
+  };
   try {
     body = await req.json();
   } catch {
@@ -114,7 +120,9 @@ Deno.serve(async (req) => {
     stream_options: { include_usage: true },
     enable_thinking: false,
     temperature: 0.6,
-    max_tokens: 2048,
+    // Chat replies stay short; forced callers (dev agent) may ask for more so
+    // long code files are not cut off mid-file.
+    max_tokens: Math.min(Math.max(Number(body.maxTokens) || 2048, 256), 8192),
     messages: [{ role: "system", content: system }, ...messages.slice(-16)],
   };
 

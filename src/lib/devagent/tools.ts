@@ -136,7 +136,59 @@ export class DevWorkspace {
    * locally and a config that accepts the style.dev preview host (Vite blocks
    * unknown Host headers with 403 otherwise).
    */
+  /**
+   * Guarantees the Vite entrypoints exist. A workspace restored from GitHub
+   * only carries the files the agent itself wrote, so index.html / main.tsx
+   * can be missing — which serves a blank white page.
+   */
+  async ensureEntrypoints(): Promise<void> {
+    const has = await this.bash(
+      "test -f index.html && echo html; test -f src/main.tsx -o -f src/main.jsx && echo main; test -f src/App.tsx -o -f src/App.jsx && echo app; test -f src/index.css && echo css",
+      30_000,
+    );
+    if (!has.stdout.includes("html")) {
+      await this.client.writeFile(
+        this.vmId,
+        `${WORKDIR}/index.html`,
+        [
+          "<!doctype html>",
+          '<html lang="en">',
+          '  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>App</title></head>',
+          '  <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>',
+          "</html>",
+          "",
+        ].join("\n"),
+      ).catch(() => undefined);
+    }
+    if (!has.stdout.includes("main")) {
+      await this.client.writeFile(
+        this.vmId,
+        `${WORKDIR}/src/main.tsx`,
+        [
+          "import React from 'react';",
+          "import ReactDOM from 'react-dom/client';",
+          "import App from './App';",
+          "import './index.css';",
+          "",
+          "ReactDOM.createRoot(document.getElementById('root')!).render(",
+          "  <React.StrictMode>",
+          "    <App />",
+          "  </React.StrictMode>,",
+          ");",
+          "",
+        ].join("\n"),
+      ).catch(() => undefined);
+    }
+    if (!has.stdout.includes("css")) {
+      await this.bash(
+        `printf '%s\\n' "@tailwind base;" "@tailwind components;" "@tailwind utilities;" > src/index.css`,
+        30_000,
+      );
+    }
+  }
+
   async ensureDevServerDeps(): Promise<void> {
+    await this.ensureEntrypoints();
     const cfg = await this.client.readFile(this.vmId, `${WORKDIR}/vite.config.ts`).catch(() => "");
     if (!cfg.includes("allowedHosts")) {
       await this.client.writeFile(
@@ -170,6 +222,7 @@ export class DevWorkspace {
   /** Starts the Vite dev server on port 3000 (the VM's public preview port). */
   async startDevServer(): Promise<void> {
     await this.ensureDevServerDeps();
+    await this.installMissingImports();
     await this.bash(
       // Kill by port, not by name: pkill -f 'vite' matches this very shell's
       // own cmdline (it contains "npx vite …") and kills itself (exit 143).
@@ -255,7 +308,100 @@ export class DevWorkspace {
 
   /** Type-checks + builds. This is the verifier's ground truth. */
   async build(): Promise<ExecResult> {
-    return this.bash("npm run build 2>&1 | tail -60", 480_000);
+    await this.installMissingImports();
+    // `| tail` would mask the build exit code — capture it explicitly.
+    return this.bash(
+      "npm run build > /tmp/build.log 2>&1; code=$?; tail -60 /tmp/build.log; exit $code",
+      480_000,
+    );
+  }
+
+  /**
+   * Installs every bare package the source imports but that is not in
+   * node_modules. The coder frequently imports a library (react-icons,
+   * zustand, …) without installing it, which serves a blank page.
+   */
+  async installMissingImports(): Promise<void> {
+    const scan = await this.bash(
+      "grep -rhoE \"from ['\\\"][^.@/][^'\\\"]*['\\\"]|from ['\\\"]@[^'\\\"]+['\\\"]\" src 2>/dev/null | sed -E \"s/.*['\\\"](.*)['\\\"]/\\1/\" | sort -u",
+      60_000,
+    );
+    const pkgs = new Set<string>();
+    for (const raw of scan.stdout.split("\n")) {
+      const spec = raw.trim();
+      if (!spec || spec.startsWith(".") || spec.startsWith("/")) continue;
+      const name = spec.startsWith("@")
+        ? spec.split("/").slice(0, 2).join("/")
+        : spec.split("/")[0];
+      if (!name || name === "react" || name === "react-dom") continue;
+      if (!/^[@a-z0-9][\w./-]*$/i.test(name)) continue;
+      pkgs.add(name);
+    }
+    if (!pkgs.size) return;
+    const list = [...pkgs].join(" ");
+    await this.bash(
+      `missing=""; for p in ${list}; do [ -d "node_modules/$p" ] || missing="$missing $p"; done; ` +
+        `[ -n "$missing" ] && npm install $missing > /tmp/auto-install.log 2>&1; true`,
+      280_000,
+    );
+  }
+
+  /**
+   * Cheap static checks for the mistakes that build fine but blank the page
+   * at runtime (duplicate routers, missing default export on an imported
+   * component, imports of files that do not exist).
+   */
+  async staticIssues(): Promise<string[]> {
+    const issues: string[] = [];
+    const routers = await this.bash(
+      "grep -rl 'BrowserRouter\\|createBrowserRouter' src 2>/dev/null | sort",
+      60_000,
+    );
+    const routerFiles = routers.stdout.split("\n").map((f) => f.trim()).filter(Boolean);
+    if (routerFiles.length > 1) {
+      issues.push(
+        `The router is mounted in more than one file (${routerFiles.join(", ")}). Keep exactly one <BrowserRouter> — in src/App.tsx — and remove it from the others.`,
+      );
+    }
+    // Every relative import must resolve to a real file. Parsing happens here
+    // (not in shell) so quotes and `../` segments are handled correctly.
+    const rawImports = await this.bash(
+      "grep -rnE \"from ['\\\"]\\\\.\" src 2>/dev/null | head -300",
+      60_000,
+    );
+    const targets = new Set<string>();
+    for (const line of rawImports.stdout.split("\n")) {
+      const m = /^([^:]+):\d+:.*from\s+['"](\.[^'"]+)['"]/.exec(line.trim());
+      if (!m) continue;
+      const segs = m[1].split("/").slice(0, -1).concat(m[2].split("/"));
+      const stack: string[] = [];
+      for (const seg of segs) {
+        if (seg === "." || seg === "") continue;
+        if (seg === "..") stack.pop();
+        else stack.push(seg);
+      }
+      const target = stack.join("/");
+      if (target && /^[\w./-]+$/.test(target)) targets.add(target);
+    }
+    if (targets.size) {
+      const check = await this.bash(
+        `for t in ${[...targets].slice(0, 60).map((t) => `'${t}'`).join(" ")}; do ` +
+          `ls -d $t $t.tsx $t.ts $t.jsx $t.js $t/index.tsx $t/index.ts > /dev/null 2>&1 || echo "MISSING $t"; done`,
+        60_000,
+      );
+      for (const m of check.stdout.split("\n").filter((l) => l.startsWith("MISSING "))) {
+        issues.push(`${m.replace("MISSING ", "Imported file does not exist: ")} — create it or fix the import.`);
+      }
+    }
+
+    const noDefault = await this.bash(
+      "for f in $(ls src/components/*.tsx src/screens/*.tsx src/pages/*.tsx 2>/dev/null); do grep -q 'export default' $f || echo \"NODEFAULT $f\"; done",
+      60_000,
+    );
+    for (const m of noDefault.stdout.split("\n").filter((l) => l.startsWith("NODEFAULT "))) {
+      issues.push(`${m.replace("NODEFAULT ", "File has no default export: ")} — add \`export default\`.`);
+    }
+    return issues.slice(0, 6);
   }
 
   /** Writes Supabase credentials the generated app can use. */

@@ -9,7 +9,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { FreestyleClient } from "./freestyle";
 import { DevWorkspace, runTool, screenshotUrl, type ToolCall } from "./tools";
-import { askJson, askModel, extractJson, lastModelError } from "./llm";
+import { askJson, askModel, lastModelError } from "./llm";
 import {
   ensurePrivateGithubRepo,
   restoreWorkspaceFromGithub,
@@ -66,15 +66,42 @@ then polish (animations, responsive, empty states).
 ${DESIGN_SYSTEM}`;
 
 const CODER_SYSTEM = `You are the coder of an autonomous agent working inside a real Linux VM on a
-React 18 + Vite + TypeScript + Tailwind project at /app. You output ONE tool call as JSON, nothing else:
+React 18 + Vite + TypeScript + Tailwind project at /app.
 
-{"thought":"<one short sentence>","tool":"write_file","path":"src/App.tsx","content":"<full file content>"}
-{"thought":"...","tool":"read_file","path":"src/App.tsx"}
-{"thought":"...","tool":"list_dir","path":"src"}
-{"thought":"...","tool":"delete_file","path":"src/old.tsx"}
-{"thought":"...","tool":"bash","command":"npm install zustand"}
-{"thought":"...","tool":"build"}
-{"thought":"...","tool":"done","summary":"<what you changed>"}
+Reply with ONE tool call in this exact line format — never JSON, never markdown fences:
+
+TOOL: write_file
+PATH: src/components/Sidebar.tsx
+BODY:
+<the complete file content, raw code>
+<<<END>>>
+
+Other tools (single line each, no BODY):
+TOOL: bash
+CMD: npm install zustand
+<<<END>>>
+
+TOOL: read_file
+PATH: src/App.tsx
+<<<END>>>
+
+TOOL: list_dir
+PATH: src
+<<<END>>>
+
+TOOL: delete_file
+PATH: src/old.tsx
+<<<END>>>
+
+TOOL: build
+<<<END>>>
+
+TOOL: done
+SUMMARY: <what you changed>
+<<<END>>>
+
+Always finish with the literal line <<<END>>>. If your reply gets cut off before it,
+you will be asked to continue exactly where you stopped — continue with raw code only.
 
 KNOWN SCAFFOLD (never read or inspect these — they are already correct):
 package.json, index.html, vite.config.js, tailwind.config.cjs, postcss.config.cjs,
@@ -83,17 +110,16 @@ Tailwind, framer-motion, lucide-react, clsx and react-router-dom are installed.
 
 Rules:
 - START WRITING IMMEDIATELY. Do not explore the project. read_file/list_dir are almost
-  never needed; use them at most once, and never on the scaffold files above.
-- ONE write_file per reply. Your whole reply MUST stay under 5000 characters, otherwise
-  it gets cut off and is thrown away. Keep every file under ~140 lines; split a big screen
-  into several small components written over consecutive replies.
+  never needed, and never on the scaffold files above.
+- ONE tool per reply. Keep every file under ~120 lines; split big screens into small
+  components written over consecutive replies. App.tsx holds routes only.
 - write_file always contains the COMPLETE final file, never a diff or placeholder.
-- Build real, production-quality React components — typed props, Tailwind styling.
-- Never write index.html-only apps. Never use CDN React.
+- Every component file must have a \`export default\` at the end.
+- <BrowserRouter> is mounted exactly once, in src/App.tsx. Never put a Router
+  inside a screen, layout or component file.
+- Only import files that already exist or that you have written in this task.
 - Install any other package you import, with bash, before using it.
-- Do not repeat a failed action unchanged; change approach.
-- Finish the current task with "done" as soon as it is complete.
-- JSON only, no markdown fences.
+- Do not repeat a file you already wrote; move on or call done.
 
 ${DESIGN_SYSTEM}`;
 
@@ -172,6 +198,35 @@ async function plan(token: string, prompt: string, tree: string): Promise<string
   ]);
   const tasks = (res?.tasks ?? []).filter((t) => typeof t === "string" && t.trim()).slice(0, 8);
   return tasks.length ? tasks : [prompt];
+}
+
+/**
+ * Parses the coder's line protocol. Tolerates a missing trailing `<<<END>>>`
+ * (a cut-off reply still yields the partial file, which is better than nothing)
+ * and stray markdown fences.
+ */
+export function parseToolReply(raw: string): (ToolCall & { summary?: string })[] {
+  if (!raw) return [];
+  const text = raw.replace(/```[a-zA-Z]*\n?/g, "");
+  const blocks = text.split("<<<END>>>").map((b) => b.trim()).filter(Boolean);
+  const calls: (ToolCall & { summary?: string })[] = [];
+  for (const block of blocks) {
+    const toolMatch = block.match(/^\s*TOOL:\s*(\w+)\s*$/m);
+    if (!toolMatch) continue;
+    const tool = toolMatch[1] as ToolCall["tool"];
+    const path = block.match(/^\s*PATH:\s*(.+)$/m)?.[1]?.trim();
+    const command = block.match(/^\s*CMD:\s*(.+)$/m)?.[1]?.trim();
+    const summary = block.match(/^\s*SUMMARY:\s*([\s\S]*)$/m)?.[1]?.trim();
+    let content: string | undefined;
+    const bodyIdx = block.indexOf("\nBODY:");
+    if (bodyIdx !== -1) {
+      content = block.slice(bodyIdx + "\nBODY:".length).replace(/^\n/, "");
+    }
+    if (tool === "write_file" && (!path || !content)) continue;
+    calls.push({ tool, path, command, content, summary } as ToolCall & { summary?: string });
+    if (calls.length >= 4) break;
+  }
+  return calls;
 }
 
 /** Runs one bounded slice. Returns true when the whole run is finished. */
@@ -285,6 +340,8 @@ export async function advanceDevRun(
   const noToolCall = new Map<string, number>();
   /** Files already read this slice — re-reads are the classic stall loop. */
   const readOnce = new Set<string>();
+  /** Files written per task — rewriting the same file forever is the other stall. */
+  const written = new Map<string, string[]>();
   while (Date.now() - started < SLICE_MS) {
     const task = tasks.find((t) => t.status !== "done" && t.status !== "failed");
     if (!task) break;
@@ -311,45 +368,51 @@ export async function advanceDevRun(
 
     // The coder call itself can take up to ~40s — end the slice early
     // instead of blowing far past SLICE_MS and leaving the client silent.
-    if (Date.now() - started > SLICE_MS - 150_000) break;
+    if (Date.now() - started > SLICE_MS - 40_000) break;
 
-    const truncated = (noToolCall.get(task.id) ?? 0) > 0;
-    const rawReply = await askModel(
-      token,
-      CODER_SYSTEM,
-      [
+    const doneFiles = written.get(task.id) ?? [];
+    const askCoder = (extra: string, assistantSoFar?: string) =>
+      askModel(token, CODER_SYSTEM, [
         {
           role: "user",
           content: [
             `USER REQUEST: ${run.prompt}`,
             `CURRENT TASK: ${task.title}`,
-            `PROJECT FILES:\n${await ws.tree()}`,
+            `PROJECT FILES:\n${treeText}`,
             log.length ? `RECENT ACTIONS:\n${log.join("\n")}` : "RECENT ACTIONS: (none yet)",
-            truncated
-              ? "Your previous reply was CUT OFF because it was too long. Write ONE smaller file (under 100 lines) this time."
-              : "Reply with the next tool call as JSON only. One file per reply, under 5000 characters.",
-          ].join("\n\n"),
+            doneFiles.length
+              ? `FILES ALREADY WRITTEN FOR THIS TASK (do NOT rewrite them):\n${doneFiles.join("\n")}`
+              : "",
+            extra,
+          ].filter(Boolean).join("\n\n"),
         },
-      ],
+        ...(assistantSoFar
+          ? ([{ role: "assistant", content: assistantSoFar }] as { role: "assistant"; content: string }[])
+          : []),
+      ]);
+
+    const treeText = await ws.tree();
+    let rawReply = await askCoder(
+      "Reply with the next tool call in the line format. Finish with <<<END>>>.",
     );
+    // Continuation: the model gets cut off mid-file, so ask it to resume from
+    // exactly where it stopped instead of throwing the whole file away.
+    for (let c = 0; c < 4 && rawReply && !rawReply.includes("<<<END>>>"); c++) {
+      const more = await askCoder(
+        "Your previous reply was cut off. Continue the file EXACTLY where it stopped — output raw code only, no repetition, no explanations — and finish with <<<END>>>.",
+        rawReply.slice(-4000),
+      );
+      if (!more) break;
+      rawReply += more;
+    }
 
-    const reply = extractJson<
-      ToolCall & { thought?: string; summary?: string; tools?: (ToolCall & { summary?: string })[] }
-    >(rawReply);
-
-    const batch = (Array.isArray(reply?.tools) && reply!.tools!.length
-      ? reply!.tools!
-      : reply?.tool
-        ? [reply as ToolCall & { summary?: string }]
-        : []
-    ).slice(0, 6);
+    const batch = parseToolReply(rawReply);
 
     if (batch.length === 0) {
-      // A single malformed JSON reply must not kill the whole task — retry a
+      // A single malformed reply must not kill the whole task — retry a
       // couple of times before giving up on it.
       const misses = (noToolCall.get(task.id) ?? 0) + 1;
       noToolCall.set(task.id, misses);
-      // Surface why: an empty/garbled model reply is otherwise invisible.
       await event(db, run, "tool", `invalid model reply (${rawReply.length} chars)`, {
         ok: false,
         output: rawReply.slice(0, 1500) || `(empty response from model) ${lastModelError}`,
@@ -365,7 +428,7 @@ export async function advanceDevRun(
       if (call.tool === "done") {
         await db
           .from("dev_tasks")
-          .update({ status: "done", result: (call.summary ?? reply?.summary ?? "").slice(0, 1000) })
+          .update({ status: "done", result: (call.summary ?? "").slice(0, 1000) })
           .eq("id", task.id);
         task.status = "done";
         await event(db, run, "task_done", task.title, { summary: call.summary ?? null });
@@ -384,6 +447,21 @@ export async function advanceDevRun(
         readOnce.add(call.path);
       }
 
+      if (call.tool === "write_file" && call.path) {
+        const list = written.get(task.id) ?? [];
+        if (list.filter((p) => p === call.path).length >= 2) {
+          // Third attempt at the same file in one task: the model is looping.
+          await db
+            .from("dev_tasks")
+            .update({ status: "done", result: `wrote ${list.length} files` })
+            .eq("id", task.id);
+          task.status = "done";
+          await event(db, run, "task_done", task.title, { summary: "auto-closed (repeat writes)" });
+          break;
+        }
+        list.push(call.path);
+        written.set(task.id, list);
+      }
       const result = await runTool(ws, call);
       if (result.ok && project.github_repo && call.tool === "write_file" && call.path) {
         try {
@@ -410,7 +488,7 @@ export async function advanceDevRun(
         run,
         "tool",
         `${call.tool}${call.path ? ` ${call.path}` : call.command ? ` ${String(call.command).slice(0, 80)}` : ""}`,
-        { ok: result.ok, output: result.output.slice(0, 3000), thought: reply?.thought ?? null },
+        { ok: result.ok, output: result.output.slice(0, 3000), thought: null },
       );
       await patchRun(db, run, { step: (run.step ?? 0) + 1 });
       run.step = (run.step ?? 0) + 1;
@@ -430,12 +508,21 @@ export async function advanceDevRun(
   await event(db, run, "status", "التحقق من البناء");
   let build = await ws.build();
   for (let i = 0; build.exitCode !== 0 && i < MAX_BUILD_FIXES; i++) {
-    const fix = await askJson<ToolCall & { thought?: string }>(token, CODER_SYSTEM, [
+    let fixRaw = await askModel(token, CODER_SYSTEM, [
       {
         role: "user",
-        content: `The build failed. Fix it with ONE tool call.\n\nBUILD OUTPUT:\n${build.stdout.slice(-4000)}\n${build.stderr.slice(-2000)}\n\nPROJECT FILES:\n${await ws.tree()}`,
+        content: `The build failed. Fix it with ONE tool call in the line format, finishing with <<<END>>>.\n\nBUILD OUTPUT:\n${build.stdout.slice(-4000)}\n${build.stderr.slice(-2000)}\n\nPROJECT FILES:\n${await ws.tree()}`,
       },
     ]);
+    for (let c = 0; c < 4 && fixRaw && !fixRaw.includes("<<<END>>>"); c++) {
+      const more = await askModel(token, CODER_SYSTEM, [
+        { role: "user", content: "Continue the cut-off reply exactly where it stopped, raw code only, finish with <<<END>>>." },
+        { role: "assistant", content: fixRaw.slice(-4000) },
+      ]);
+      if (!more) break;
+      fixRaw += more;
+    }
+    const fix = parseToolReply(fixRaw)[0];
     if (!fix?.tool || fix.tool === "done") break;
     const r = await runTool(ws, fix);
     await event(db, run, "tool", `fix ${fix.tool} ${fix.path ?? ""}`.trim(), {
@@ -444,6 +531,36 @@ export async function advanceDevRun(
     });
     build = await ws.build();
   }
+  // Static runtime guard: a green build still blanks the page on duplicate
+  // routers / missing files, so fix those with the same repair loop.
+  let issues = await ws.staticIssues();
+  for (let i = 0; issues.length && i < MAX_BUILD_FIXES; i++) {
+    await event(db, run, "status", `إصلاح ${issues.length} مشكلة تشغيل`, { output: issues.join("\n") });
+    let raw = await askModel(token, CODER_SYSTEM, [
+      {
+        role: "user",
+        content: `The app builds but breaks at runtime. Fix the FIRST issue with ONE tool call in the line format, finishing with <<<END>>>.\n\nISSUES:\n${issues.join("\n")}\n\nPROJECT FILES:\n${await ws.tree()}`,
+      },
+    ]);
+    for (let c = 0; c < 4 && raw && !raw.includes("<<<END>>>"); c++) {
+      const more = await askModel(token, CODER_SYSTEM, [
+        { role: "user", content: "Continue the cut-off reply exactly where it stopped, raw code only, finish with <<<END>>>." },
+        { role: "assistant", content: raw.slice(-4000) },
+      ]);
+      if (!more) break;
+      raw += more;
+    }
+    const fix = parseToolReply(raw)[0];
+    if (!fix?.tool || fix.tool === "done") break;
+    const r = await runTool(ws, fix);
+    await event(db, run, "tool", `fix ${fix.tool} ${fix.path ?? ""}`.trim(), {
+      ok: r.ok,
+      output: r.output.slice(0, 1500),
+    });
+    issues = await ws.staticIssues();
+  }
+  if (issues.length === 0) build = await ws.build();
+
   const buildOk = build.exitCode === 0;
   await event(db, run, buildOk ? "build_ok" : "build_failed", buildOk ? "البناء ناجح" : "البناء فشل", {
     output: build.stdout.slice(-2000),
