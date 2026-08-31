@@ -222,6 +222,7 @@ export class DevWorkspace {
   /** Starts the Vite dev server on port 3000 (the VM's public preview port). */
   async startDevServer(): Promise<void> {
     await this.ensureDevServerDeps();
+    await this.ensureTailwindCss();
     await this.installMissingImports();
     await this.bash(
       // Kill by port, not by name: pkill -f 'vite' matches this very shell's
