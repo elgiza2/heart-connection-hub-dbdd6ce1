@@ -536,6 +536,32 @@ export async function advanceDevRun(
     return false;
   }
 
+  // --------------------------------------------------- completeness gate
+  // All tasks "done" but the app is still a skeleton? Queue one extra round
+  // of real tasks instead of shipping a single page. Runs at most twice.
+  const { data: gateEvents } = await db
+    .from("dev_events")
+    .select("id")
+    .eq("run_id", run.id)
+    .eq("type", "completeness");
+  if ((gateEvents?.length ?? 0) < 2 && run.intent !== "question") {
+    const gaps = await ws.completenessIssues();
+    if (gaps.length) {
+      await event(db, run, "completeness", `المشروع ناقص — ${gaps.length} فجوة`, { gaps });
+      const extra = gaps.map((gap, i) => ({
+        run_id: run.id,
+        user_id: run.user_id,
+        position: tasks.length + i,
+        title: gap.slice(0, 200),
+        status: "pending",
+      }));
+      await db.from("dev_tasks").insert(extra);
+      await patchRun(db, run, { status: "running" });
+      return false;
+    }
+  }
+
+
   // ---------------------------------------------------------------- verify
   await event(db, run, "status", "التحقق من البناء");
   let build = await ws.build();
