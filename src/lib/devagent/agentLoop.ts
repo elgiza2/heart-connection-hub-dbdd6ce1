@@ -130,6 +130,11 @@ Rules:
 - Only import files that already exist or that you have written in this task.
 - Install any other package you import, with bash, before using it.
 - Do not repeat a file you already wrote; move on or call done.
+- NEVER call done before you have written at least one real file for the CURRENT
+  task. A page task is only done when the page renders a full screen of content
+  (header, real mock data list/grid, interactive state) — not a heading.
+- Pages live in src/pages/<Name>.tsx and are routed from src/App.tsx; shared mock
+  data lives in src/data/*.ts so every page reads from it.
 - Exception to the scaffold rule: rewrite index.html once to set a real
   <title> and <meta name="description"> for the product (keep the
   <div id="root"> and the /src/main.tsx script tag unchanged).
