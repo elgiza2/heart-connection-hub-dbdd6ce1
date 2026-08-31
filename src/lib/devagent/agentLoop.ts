@@ -303,16 +303,17 @@ export async function advanceDevRun(
       .limit(120);
     const log = (priorEvents ?? [])
       .filter((e) => e.type === "tool")
-      .slice(-14)
+      .slice(-10)
       .map((e) => {
         const p = (e.payload ?? {}) as { output?: string };
-        return `- ${e.title}${p.output ? ` → ${String(p.output).slice(0, 500)}` : ""}`;
+        return `- ${e.title}${p.output ? ` → ${String(p.output).slice(0, 160)}` : ""}`;
       });
 
     // The coder call itself can take up to ~40s — end the slice early
     // instead of blowing far past SLICE_MS and leaving the client silent.
     if (Date.now() - started > SLICE_MS - 150_000) break;
 
+    const truncated = (noToolCall.get(task.id) ?? 0) > 0;
     const rawReply = await askModel(
       token,
       CODER_SYSTEM,
@@ -324,7 +325,9 @@ export async function advanceDevRun(
             `CURRENT TASK: ${task.title}`,
             `PROJECT FILES:\n${await ws.tree()}`,
             log.length ? `RECENT ACTIONS:\n${log.join("\n")}` : "RECENT ACTIONS: (none yet)",
-            "Reply with the next tool call(s) as JSON only. Batch 2-4 write_file calls when you can.",
+            truncated
+              ? "Your previous reply was CUT OFF because it was too long. Write ONE smaller file (under 100 lines) this time."
+              : "Reply with the next tool call as JSON only. One file per reply, under 5000 characters.",
           ].join("\n\n"),
         },
       ],
@@ -351,7 +354,7 @@ export async function advanceDevRun(
         ok: false,
         output: rawReply.slice(0, 1500) || `(empty response from model) ${lastModelError}`,
       });
-      if (misses < 3) continue;
+      if (misses < 4) continue;
       await db.from("dev_tasks").update({ status: "failed", result: "no tool call" }).eq("id", task.id);
       task.status = "failed";
       continue;
