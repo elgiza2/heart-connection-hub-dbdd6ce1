@@ -306,8 +306,27 @@ export class DevWorkspace {
     return res.stdout.trim();
   }
 
+  /**
+   * The coder often rewrites src/index.css with hand-rolled CSS variables and
+   * drops the @tailwind directives — every Tailwind class in the app then does
+   * nothing and the page renders unstyled. Re-inject the directives on top.
+   */
+  async ensureTailwindCss(): Promise<void> {
+    await this.bash(
+      [
+        "test -f src/index.css || : > src/index.css",
+        "grep -q '@tailwind utilities' src/index.css || " +
+          "{ printf '%s\\n' '@tailwind base;' '@tailwind components;' '@tailwind utilities;' '' > /tmp/tw.css" +
+          " && cat src/index.css >> /tmp/tw.css && mv /tmp/tw.css src/index.css; }",
+        "true",
+      ].join("; "),
+      30_000,
+    );
+  }
+
   /** Type-checks + builds. This is the verifier's ground truth. */
   async build(): Promise<ExecResult> {
+    await this.ensureTailwindCss();
     await this.installMissingImports();
     // `| tail` would mask the build exit code — capture it explicitly.
     return this.bash(
