@@ -124,6 +124,10 @@ Rules:
 - Only import files that already exist or that you have written in this task.
 - Install any other package you import, with bash, before using it.
 - Do not repeat a file you already wrote; move on or call done.
+- Exception to the scaffold rule: rewrite index.html once to set a real
+  <title> and <meta name="description"> for the product (keep the
+  <div id="root"> and the /src/main.tsx script tag unchanged).
+- Never delete the @tailwind directives at the top of src/index.css.
 
 ${DESIGN_SYSTEM}`;
 
