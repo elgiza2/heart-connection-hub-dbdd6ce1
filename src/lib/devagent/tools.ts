@@ -351,6 +351,32 @@ export class DevWorkspace {
    * at runtime (duplicate routers, missing default export on an imported
    * component, imports of files that do not exist).
    */
+  /**
+   * Deterministic repairs for the two mistakes the coder repeats most:
+   * a second <BrowserRouter> in main.tsx (React throws and the page blanks)
+   * and a main.tsx that forgets to import the stylesheet.
+   */
+  async normalizeEntrypoint(): Promise<void> {
+    const main = await this.bash("cat src/main.tsx 2>/dev/null || cat src/main.jsx 2>/dev/null", 30_000);
+    const app = await this.bash("cat src/App.tsx 2>/dev/null || cat src/App.jsx 2>/dev/null", 30_000);
+    let body = main.stdout;
+    if (!body.trim()) return;
+    const appHasRouter = /BrowserRouter|createBrowserRouter/.test(app.stdout);
+    let changed = false;
+    if (appHasRouter && /BrowserRouter/.test(body)) {
+      body = body
+        .replace(/^.*\bBrowserRouter\b.*from\s+['"]react-router-dom['"];?\s*$/gm, "")
+        .replace(/<BrowserRouter>\s*/g, "")
+        .replace(/\s*<\/BrowserRouter>/g, "");
+      changed = true;
+    }
+    if (!/index\.css|globals?\.css/.test(body)) {
+      body = body.replace(/(^import .*$)/m, "$1\nimport './index.css';");
+      changed = true;
+    }
+    if (changed) await this.writeFile("src/main.tsx", body.replace(/\n{3,}/g, "\n\n"));
+  }
+
   async staticIssues(): Promise<string[]> {
     const issues: string[] = [];
     const routers = await this.bash(
