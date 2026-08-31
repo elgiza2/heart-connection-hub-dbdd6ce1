@@ -481,8 +481,8 @@ export async function advanceDevRun(
 
       if (call.tool === "write_file" && call.path) {
         const list = written.get(task.id) ?? [];
-        if (list.filter((p) => p === call.path).length >= 2) {
-          // Third attempt at the same file in one task: the model is looping.
+        if (list.filter((p) => p === call.path).length >= 3) {
+          // Fourth attempt at the same file in one task: the model is looping.
           await db
             .from("dev_tasks")
             .update({ status: "done", result: `wrote ${list.length} files` })
