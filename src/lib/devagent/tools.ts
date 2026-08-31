@@ -397,6 +397,65 @@ export class DevWorkspace {
     if (changed) await this.writeFile("src/main.tsx", body.replace(/\n{3,}/g, "\n\n"));
   }
 
+  /**
+   * "Is this actually a product?" checks. A build can be green while the app
+   * is a single hero screen — that is the #1 complaint about generated apps.
+   * These issues are fed back to the coder as extra work, not as errors.
+   */
+  async completenessIssues(): Promise<string[]> {
+    const issues: string[] = [];
+    const res = await this.bash(
+      [
+        "echo '<<<ROUTES>>>'",
+        "grep -rhoE '<Route[^>]*path=' src 2>/dev/null | wc -l",
+        "echo '<<<PAGES>>>'",
+        "ls src/pages/*.tsx src/pages/*.jsx src/screens/*.tsx 2>/dev/null | wc -l",
+        "echo '<<<COMPONENTS>>>'",
+        "ls src/components/*.tsx src/components/**/*.tsx 2>/dev/null | wc -l",
+        "echo '<<<LINES>>>'",
+        "cat $(find src -name '*.tsx' -o -name '*.jsx' 2>/dev/null) 2>/dev/null | wc -l",
+        "echo '<<<LINK>>>'",
+        "grep -rhoE '<(Link|NavLink)\\b' src 2>/dev/null | wc -l",
+      ].join("; "),
+      60_000,
+    );
+    const num = (key: string) => {
+      const m = new RegExp(`<<<${key}>>>\\s*(\\d+)`).exec(res.stdout);
+      return m ? Number(m[1]) : 0;
+    };
+    const routes = num("ROUTES");
+    const pages = num("PAGES");
+    const components = num("COMPONENTS");
+    const lines = num("LINES");
+    const links = num("LINK");
+    if (routes < 4) {
+      issues.push(
+        `The app only has ${routes} route(s). A real product needs at least 4 routed pages in src/pages (e.g. Home, Browse/Explore, Detail, Library/Profile, Search) wired in src/App.tsx.`,
+      );
+    }
+    if (pages < 4) {
+      issues.push(
+        `Only ${pages} page file(s) exist under src/pages. Create the missing page components with real content, mock data and framer-motion.`,
+      );
+    }
+    if (components < 4) {
+      issues.push(
+        `Only ${components} component file(s) exist. Extract a real UI: navigation/sidebar, cards, lists, player/detail panels, empty states.`,
+      );
+    }
+    if (links < 3) {
+      issues.push(
+        "Navigation is missing: add a persistent sidebar/header with <Link> entries to every page so the app is actually navigable.",
+      );
+    }
+    if (lines < 600) {
+      issues.push(
+        `The whole app is only ${lines} lines of JSX — it is a skeleton. Flesh out each page with realistic mock data (10-30 items), interactive state and responsive layout.`,
+      );
+    }
+    return issues.slice(0, 5);
+  }
+
   async staticIssues(): Promise<string[]> {
     const issues: string[] = [];
     const routers = await this.bash(
