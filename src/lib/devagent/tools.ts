@@ -346,6 +346,58 @@ export class DevWorkspace {
     );
   }
 
+  /**
+   * Cheap static checks for the mistakes that build fine but blank the page
+   * at runtime (duplicate routers, missing default export on an imported
+   * component, imports of files that do not exist).
+   */
+  async staticIssues(): Promise<string[]> {
+    const issues: string[] = [];
+    const routers = await this.bash(
+      "grep -rl 'BrowserRouter\\|createBrowserRouter' src 2>/dev/null | sort",
+      60_000,
+    );
+    const routerFiles = routers.stdout.split("\n").map((f) => f.trim()).filter(Boolean);
+    if (routerFiles.length > 1) {
+      issues.push(
+        `The router is mounted in more than one file (${routerFiles.join(", ")}). Keep exactly one <BrowserRouter> — in src/App.tsx — and remove it from the others.`,
+      );
+    }
+    const missing = await this.bash(
+      // Every relative import must resolve to a real file.
+      "for f in $(grep -rhoE \"from '\\./[^']+'|from '\\.\\./[^']+'\" src 2>/dev/null | sed -E \"s/from '(.*)'/\\1/\" | sort -u); do :; done; " +
+        "grep -rn \"from '\\.\" src 2>/dev/null | sed -E \"s/:.*from '(.*)'.*/ -> \\1/\" | head -200",
+      60_000,
+    );
+    const lines = missing.stdout.split("\n").filter(Boolean);
+    const bad: string[] = [];
+    for (const line of lines) {
+      const [src, spec] = line.split(" -> ");
+      if (!src || !spec) continue;
+      const dir = src.split("/").slice(0, -1).join("/");
+      const target = spec.startsWith(".") ? `${dir}/${spec}` : spec;
+      bad.push(target);
+    }
+    if (bad.length) {
+      const check = await this.bash(
+        `for t in ${[...new Set(bad)].slice(0, 60).map((t) => `'${t.replace(/'/g, "")}'`).join(" ")}; do ` +
+          `ls $t $t.tsx $t.ts $t.jsx $t.js $t/index.tsx $t/index.ts > /dev/null 2>&1 || echo "MISSING $t"; done`,
+        60_000,
+      );
+      for (const m of check.stdout.split("\n").filter((l) => l.startsWith("MISSING "))) {
+        issues.push(`${m.replace("MISSING ", "Imported file does not exist: ")} — create it or fix the import.`);
+      }
+    }
+    const noDefault = await this.bash(
+      "for f in $(ls src/components/*.tsx src/screens/*.tsx src/pages/*.tsx 2>/dev/null); do grep -q 'export default' $f || echo \"NODEFAULT $f\"; done",
+      60_000,
+    );
+    for (const m of noDefault.stdout.split("\n").filter((l) => l.startsWith("NODEFAULT "))) {
+      issues.push(`${m.replace("NODEFAULT ", "File has no default export: ")} — add \`export default\`.`);
+    }
+    return issues.slice(0, 6);
+  }
+
   /** Writes Supabase credentials the generated app can use. */
   async writeSupabaseEnv(url: string, anonKey: string): Promise<void> {
     await this.writeFile(".env", `VITE_SUPABASE_URL=${url}\nVITE_SUPABASE_ANON_KEY=${anonKey}\n`);

@@ -529,6 +529,36 @@ export async function advanceDevRun(
     });
     build = await ws.build();
   }
+  // Static runtime guard: a green build still blanks the page on duplicate
+  // routers / missing files, so fix those with the same repair loop.
+  let issues = await ws.staticIssues();
+  for (let i = 0; issues.length && i < MAX_BUILD_FIXES; i++) {
+    await event(db, run, "status", `إصلاح ${issues.length} مشكلة تشغيل`, { output: issues.join("\n") });
+    let raw = await askModel(token, CODER_SYSTEM, [
+      {
+        role: "user",
+        content: `The app builds but breaks at runtime. Fix the FIRST issue with ONE tool call in the line format, finishing with <<<END>>>.\n\nISSUES:\n${issues.join("\n")}\n\nPROJECT FILES:\n${await ws.tree()}`,
+      },
+    ]);
+    for (let c = 0; c < 4 && raw && !raw.includes("<<<END>>>"); c++) {
+      const more = await askModel(token, CODER_SYSTEM, [
+        { role: "user", content: "Continue the cut-off reply exactly where it stopped, raw code only, finish with <<<END>>>." },
+        { role: "assistant", content: raw.slice(-4000) },
+      ]);
+      if (!more) break;
+      raw += more;
+    }
+    const fix = parseToolReply(raw)[0];
+    if (!fix?.tool || fix.tool === "done") break;
+    const r = await runTool(ws, fix);
+    await event(db, run, "tool", `fix ${fix.tool} ${fix.path ?? ""}`.trim(), {
+      ok: r.ok,
+      output: r.output.slice(0, 1500),
+    });
+    issues = await ws.staticIssues();
+  }
+  if (issues.length === 0) build = await ws.build();
+
   const buildOk = build.exitCode === 0;
   await event(db, run, buildOk ? "build_ok" : "build_failed", buildOk ? "البناء ناجح" : "البناء فشل", {
     output: build.stdout.slice(-2000),
