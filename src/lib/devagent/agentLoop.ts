@@ -66,15 +66,42 @@ then polish (animations, responsive, empty states).
 ${DESIGN_SYSTEM}`;
 
 const CODER_SYSTEM = `You are the coder of an autonomous agent working inside a real Linux VM on a
-React 18 + Vite + TypeScript + Tailwind project at /app. You output ONE tool call as JSON, nothing else:
+React 18 + Vite + TypeScript + Tailwind project at /app.
 
-{"thought":"<one short sentence>","tool":"write_file","path":"src/App.tsx","content":"<full file content>"}
-{"thought":"...","tool":"read_file","path":"src/App.tsx"}
-{"thought":"...","tool":"list_dir","path":"src"}
-{"thought":"...","tool":"delete_file","path":"src/old.tsx"}
-{"thought":"...","tool":"bash","command":"npm install zustand"}
-{"thought":"...","tool":"build"}
-{"thought":"...","tool":"done","summary":"<what you changed>"}
+Reply with ONE tool call in this exact line format — never JSON, never markdown fences:
+
+TOOL: write_file
+PATH: src/components/Sidebar.tsx
+BODY:
+<the complete file content, raw code>
+<<<END>>>
+
+Other tools (single line each, no BODY):
+TOOL: bash
+CMD: npm install zustand
+<<<END>>>
+
+TOOL: read_file
+PATH: src/App.tsx
+<<<END>>>
+
+TOOL: list_dir
+PATH: src
+<<<END>>>
+
+TOOL: delete_file
+PATH: src/old.tsx
+<<<END>>>
+
+TOOL: build
+<<<END>>>
+
+TOOL: done
+SUMMARY: <what you changed>
+<<<END>>>
+
+Always finish with the literal line <<<END>>>. If your reply gets cut off before it,
+you will be asked to continue exactly where you stopped — continue with raw code only.
 
 KNOWN SCAFFOLD (never read or inspect these — they are already correct):
 package.json, index.html, vite.config.js, tailwind.config.cjs, postcss.config.cjs,
@@ -83,18 +110,14 @@ Tailwind, framer-motion, lucide-react, clsx and react-router-dom are installed.
 
 Rules:
 - START WRITING IMMEDIATELY. Do not explore the project. read_file/list_dir are almost
-  never needed; use them at most once, and never on the scaffold files above.
-- ONE write_file per reply. Your whole reply MUST stay under 3500 characters, otherwise
-  it gets cut off and is thrown away. Keep every file under ~90 lines; split a big screen
-  into several small components written over consecutive replies. App.tsx should only hold
-  routes — put layout, sidebar, player and screens in their own small files.
+  never needed, and never on the scaffold files above.
+- ONE tool per reply. Keep every file under ~120 lines; split big screens into small
+  components written over consecutive replies. App.tsx holds routes only.
 - write_file always contains the COMPLETE final file, never a diff or placeholder.
-- Build real, production-quality React components — typed props, Tailwind styling.
-- Never write index.html-only apps. Never use CDN React.
+- Every component file must have a \`export default\` at the end.
+- Only import files that already exist or that you have written in this task.
 - Install any other package you import, with bash, before using it.
-- Do not repeat a failed action unchanged; change approach.
-- Finish the current task with "done" as soon as it is complete.
-- JSON only, no markdown fences.
+- Do not repeat a file you already wrote; move on or call done.
 
 ${DESIGN_SYSTEM}`;
 
@@ -316,47 +339,49 @@ export async function advanceDevRun(
     // instead of blowing far past SLICE_MS and leaving the client silent.
     if (Date.now() - started > SLICE_MS - 40_000) break;
 
-    const truncated = (noToolCall.get(task.id) ?? 0) > 0;
     const doneFiles = written.get(task.id) ?? [];
-    const rawReply = await askModel(
-      token,
-      CODER_SYSTEM,
-      [
+    const askCoder = (extra: string, assistantSoFar?: string) =>
+      askModel(token, CODER_SYSTEM, [
         {
           role: "user",
           content: [
             `USER REQUEST: ${run.prompt}`,
             `CURRENT TASK: ${task.title}`,
-            `PROJECT FILES:\n${await ws.tree()}`,
+            `PROJECT FILES:\n${treeText}`,
             log.length ? `RECENT ACTIONS:\n${log.join("\n")}` : "RECENT ACTIONS: (none yet)",
             doneFiles.length
-              ? `FILES ALREADY WRITTEN FOR THIS TASK (do NOT rewrite them):\n${doneFiles.join("\n")}\nWrite the next missing file, or reply {"tool":"done","summary":"..."} if the task is complete.`
+              ? `FILES ALREADY WRITTEN FOR THIS TASK (do NOT rewrite them):\n${doneFiles.join("\n")}`
               : "",
-            truncated
-              ? "Your previous reply was CUT OFF because it was too long. Write ONE smaller file (under 100 lines) this time."
-              : "Reply with the next tool call as JSON only. One file per reply, under 3500 characters.",
+            extra,
           ].filter(Boolean).join("\n\n"),
         },
-      ],
+        ...(assistantSoFar
+          ? ([{ role: "assistant", content: assistantSoFar }] as { role: "assistant"; content: string }[])
+          : []),
+      ]);
+
+    const treeText = await ws.tree();
+    let rawReply = await askCoder(
+      "Reply with the next tool call in the line format. Finish with <<<END>>>.",
     );
+    // Continuation: the model gets cut off mid-file, so ask it to resume from
+    // exactly where it stopped instead of throwing the whole file away.
+    for (let c = 0; c < 4 && rawReply && !rawReply.includes("<<<END>>>"); c++) {
+      const more = await askCoder(
+        "Your previous reply was cut off. Continue the file EXACTLY where it stopped — output raw code only, no repetition, no explanations — and finish with <<<END>>>.",
+        rawReply.slice(-4000),
+      );
+      if (!more) break;
+      rawReply += more;
+    }
 
-    const reply = extractJson<
-      ToolCall & { thought?: string; summary?: string; tools?: (ToolCall & { summary?: string })[] }
-    >(rawReply);
-
-    const batch = (Array.isArray(reply?.tools) && reply!.tools!.length
-      ? reply!.tools!
-      : reply?.tool
-        ? [reply as ToolCall & { summary?: string }]
-        : []
-    ).slice(0, 6);
+    const batch = parseToolReply(rawReply);
 
     if (batch.length === 0) {
-      // A single malformed JSON reply must not kill the whole task — retry a
+      // A single malformed reply must not kill the whole task — retry a
       // couple of times before giving up on it.
       const misses = (noToolCall.get(task.id) ?? 0) + 1;
       noToolCall.set(task.id, misses);
-      // Surface why: an empty/garbled model reply is otherwise invisible.
       await event(db, run, "tool", `invalid model reply (${rawReply.length} chars)`, {
         ok: false,
         output: rawReply.slice(0, 1500) || `(empty response from model) ${lastModelError}`,
@@ -372,7 +397,7 @@ export async function advanceDevRun(
       if (call.tool === "done") {
         await db
           .from("dev_tasks")
-          .update({ status: "done", result: (call.summary ?? reply?.summary ?? "").slice(0, 1000) })
+          .update({ status: "done", result: (call.summary ?? "").slice(0, 1000) })
           .eq("id", task.id);
         task.status = "done";
         await event(db, run, "task_done", task.title, { summary: call.summary ?? null });
