@@ -9,7 +9,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { FreestyleClient } from "./freestyle";
 import { DevWorkspace, runTool, screenshotUrl, type ToolCall } from "./tools";
-import { askJson, askModel, extractJson, lastModelError } from "./llm";
+import { askJson, askModel, lastModelError } from "./llm";
 import {
   ensurePrivateGithubRepo,
   restoreWorkspaceFromGithub,
@@ -506,12 +506,21 @@ export async function advanceDevRun(
   await event(db, run, "status", "التحقق من البناء");
   let build = await ws.build();
   for (let i = 0; build.exitCode !== 0 && i < MAX_BUILD_FIXES; i++) {
-    const fix = await askJson<ToolCall & { thought?: string }>(token, CODER_SYSTEM, [
+    let fixRaw = await askModel(token, CODER_SYSTEM, [
       {
         role: "user",
-        content: `The build failed. Fix it with ONE tool call.\n\nBUILD OUTPUT:\n${build.stdout.slice(-4000)}\n${build.stderr.slice(-2000)}\n\nPROJECT FILES:\n${await ws.tree()}`,
+        content: `The build failed. Fix it with ONE tool call in the line format, finishing with <<<END>>>.\n\nBUILD OUTPUT:\n${build.stdout.slice(-4000)}\n${build.stderr.slice(-2000)}\n\nPROJECT FILES:\n${await ws.tree()}`,
       },
     ]);
+    for (let c = 0; c < 4 && fixRaw && !fixRaw.includes("<<<END>>>"); c++) {
+      const more = await askModel(token, CODER_SYSTEM, [
+        { role: "user", content: "Continue the cut-off reply exactly where it stopped, raw code only, finish with <<<END>>>." },
+        { role: "assistant", content: fixRaw.slice(-4000) },
+      ]);
+      if (!more) break;
+      fixRaw += more;
+    }
+    const fix = parseToolReply(fixRaw)[0];
     if (!fix?.tool || fix.tool === "done") break;
     const r = await runTool(ws, fix);
     await event(db, run, "tool", `fix ${fix.tool} ${fix.path ?? ""}`.trim(), {
