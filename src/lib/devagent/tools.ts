@@ -136,7 +136,59 @@ export class DevWorkspace {
    * locally and a config that accepts the style.dev preview host (Vite blocks
    * unknown Host headers with 403 otherwise).
    */
+  /**
+   * Guarantees the Vite entrypoints exist. A workspace restored from GitHub
+   * only carries the files the agent itself wrote, so index.html / main.tsx
+   * can be missing — which serves a blank white page.
+   */
+  async ensureEntrypoints(): Promise<void> {
+    const has = await this.bash(
+      "test -f index.html && echo html; test -f src/main.tsx -o -f src/main.jsx && echo main; test -f src/App.tsx -o -f src/App.jsx && echo app; test -f src/index.css && echo css",
+      30_000,
+    );
+    if (!has.stdout.includes("html")) {
+      await this.client.writeFile(
+        this.vmId,
+        `${WORKDIR}/index.html`,
+        [
+          "<!doctype html>",
+          '<html lang="en">',
+          '  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>App</title></head>',
+          '  <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>',
+          "</html>",
+          "",
+        ].join("\n"),
+      ).catch(() => undefined);
+    }
+    if (!has.stdout.includes("main")) {
+      await this.client.writeFile(
+        this.vmId,
+        `${WORKDIR}/src/main.tsx`,
+        [
+          "import React from 'react';",
+          "import ReactDOM from 'react-dom/client';",
+          "import App from './App';",
+          "import './index.css';",
+          "",
+          "ReactDOM.createRoot(document.getElementById('root')!).render(",
+          "  <React.StrictMode>",
+          "    <App />",
+          "  </React.StrictMode>,",
+          ");",
+          "",
+        ].join("\n"),
+      ).catch(() => undefined);
+    }
+    if (!has.stdout.includes("css")) {
+      await this.bash(
+        `printf '%s\\n' "@tailwind base;" "@tailwind components;" "@tailwind utilities;" > src/index.css`,
+        30_000,
+      );
+    }
+  }
+
   async ensureDevServerDeps(): Promise<void> {
+    await this.ensureEntrypoints();
     const cfg = await this.client.readFile(this.vmId, `${WORKDIR}/vite.config.ts`).catch(() => "");
     if (!cfg.includes("allowedHosts")) {
       await this.client.writeFile(
